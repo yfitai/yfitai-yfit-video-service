@@ -135,23 +135,18 @@ app.post('/assemble', async (req, res) => {
       .substring(0, 80);
     
     // Create the background image with ffmpeg drawtext
+    const safeText = safeCaption.replace(/:/g, '\\:').replace(/'/g, "'\\''");
     const bgCommand = [
-      'ffmpeg -y',
-      '-f lavfi -i "color=c=0x0a0a1a:size=1080x1920:rate=1"',
-      '-vf "',
-        'drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:',
-        `text='YFIT AI':fontsize=80:fontcolor=0x00ff88:x=(w-text_w)/2:y=200:`,
-        'shadowcolor=black:shadowx=2:shadowy=2,',
-        'drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:',
-        `text='${safeCaption.replace(/:/g, '\\:')}':fontsize=42:fontcolor=white:`,
-        'x=(w-text_w)/2:y=(h-text_h)/2:line_spacing=10:',
-        'shadowcolor=black:shadowx=1:shadowy=1',
-      '"',
-      '-frames:v 1',
-      `"${imagePath}"`
-    ].join('');
+      'ffmpeg', '-y',
+      '-f', 'lavfi',
+      '-i', `color=c=0x0a0a1a:size=1080x1920:rate=1`,
+      '-vf', `drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:text='YFIT AI':fontsize=80:fontcolor=0x00ff88:x=(w-text_w)/2:y=200:shadowcolor=black:shadowx=2:shadowy=2,drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='${safeText}':fontsize=42:fontcolor=white:x=(w-text_w)/2:y=(h-text_h)/2:line_spacing=10:shadowcolor=black:shadowx=1:shadowy=1`,
+      '-frames:v', '1',
+      imagePath
+    ];
+    const bgCommandStr = bgCommand.map(a => a.includes(' ') ? `"${a}"` : a).join(' ');
 
-    execSync(bgCommand, { timeout: 30000 });
+    execSync(bgCommandStr, { timeout: 30000 });
     console.log(`[${jobId}] Background image created`);
 
     // Step 3: Assemble video - loop image for duration of audio, overlay audio
