@@ -146,7 +146,7 @@ app.post('/assemble', async (req, res) => {
     ];
     const bgCommandStr = bgCommand.map(a => a.includes(' ') ? `"${a}"` : a).join(' ');
 
-    execSync(bgCommandStr, { timeout: 30000 });
+    execSync(bgCommandStr, { timeout: 60000, shell: true });
     console.log(`[${jobId}] Background image created`);
 
     // Step 3: Assemble video - loop image for duration of audio, overlay audio
@@ -164,7 +164,7 @@ app.post('/assemble', async (req, res) => {
       `"${videoPath}"`
     ].join(' ');
 
-    execSync(ffmpegCommand, { timeout: 120000 });
+    execSync(ffmpegCommand, { timeout: 300000, shell: true });
     
     const videoSize = fs.statSync(videoPath).size;
     console.log(`[${jobId}] Video assembled: ${videoSize} bytes`);
