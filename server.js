@@ -77,7 +77,7 @@ app.post('/assemble', async (req, res) => {
     return res.status(401).json({ error: 'Unauthorized' });
   }
 
-  const {
+  let {
     voiceover_url,
     run_date,
     content_angle,
@@ -86,6 +86,18 @@ app.post('/assemble', async (req, res) => {
     text_items = [],
     dry_run = false
   } = req.body;
+
+  // n8n sends arrays as JSON strings via JSON.stringify() - parse them back
+  if (typeof video_items === 'string') {
+    try { video_items = JSON.parse(video_items); } catch(e) { video_items = []; }
+  }
+  if (typeof text_items === 'string') {
+    try { text_items = JSON.parse(text_items); } catch(e) { text_items = []; }
+  }
+  // n8n may send dry_run as string 'false' or 'true'
+  if (typeof dry_run === 'string') {
+    dry_run = dry_run === 'true';
+  }
 
   if (!voiceover_url) {
     return res.status(400).json({ error: 'voiceover_url is required' });
