@@ -32,7 +32,7 @@ app.get('/health', (req, res) => {
     status: 'ok',
     ffmpeg: ffmpegVersion,
     pexels: PEXELS_API_KEY ? 'configured' : 'missing',
-    version: '2.2.0',
+    version: '2.3.0',
     timestamp: new Date().toISOString()
   });
 });
@@ -159,76 +159,122 @@ function wrapText(text, maxChars) {
   return lines;
 }
 
-// Parse script into individual tips/sentences for cycling captions
-function parseTips(script, caption, contentAngle) {
+// Parse script/article into caption segments for cycling
+// Returns array of { text, words } objects — words used for proportional timing
+function parseCaptionSegments(script, caption, contentAngle) {
   const src = (script || '').trim();
 
-  // Strategy 1: Split on "N." or "N)" numbered markers (handles inline lists like "1. tip 2. tip 3. tip")
+  // Strategy 1: Numbered list markers ("1. tip 2. tip 3. tip")
   if (src) {
-    // Use a regex that splits BEFORE each number+dot/paren that starts a new tip
     const parts = src.split(/(?=\b[1-9]\d*[.)\s]\s)/).map(p => p.trim()).filter(p => p.length > 0);
     const tips = parts
-      .map(p => p.replace(/^\d+[.)]+\s*/, '').trim())  // strip leading "1." or "1)"
+      .map(p => p.replace(/^\d+[.)]+\s*/, '').trim())
       .filter(t => t.length > 8);
     if (tips.length >= 2) {
-      console.log(`[parseTips] Strategy 1 (numbered): ${tips.length} tips: ${JSON.stringify(tips)}`);
-      return tips.slice(0, 6).map(t => sanitizeForDrawtext(t));
+      console.log(`[parseCaptions] Strategy 1 (numbered): ${tips.length} segments`);
+      return tips.slice(0, 6).map(t => ({
+        text: sanitizeForDrawtext(t),
+        words: t.split(/\s+/).length
+      }));
     }
   }
 
-  // Strategy 2: Split on newlines
+  // Strategy 2: Newline-separated paragraphs/bullets
   if (src) {
     const lines = src.split(/\n/)
-      .map(l => l.replace(/^\d+[.)]+\s*/, '').trim())
-      .filter(l => l.length > 8 && l.length < 120);
+      .map(l => l.replace(/^[-*•]\s*/, '').replace(/^\d+[.)]+\s*/, '').trim())
+      .filter(l => l.length > 8 && l.length < 200);
     if (lines.length >= 2) {
-      console.log(`[parseTips] Strategy 2 (newlines): ${lines.length} tips`);
-      return lines.slice(0, 6).map(l => sanitizeForDrawtext(l));
+      console.log(`[parseCaptions] Strategy 2 (newlines): ${lines.length} segments`);
+      return lines.slice(0, 8).map(l => ({
+        text: sanitizeForDrawtext(l),
+        words: l.split(/\s+/).length
+      }));
     }
   }
 
-  // Strategy 3: Split caption/script by sentence boundaries (period followed by space+capital)
-  const fullText = caption || src || contentAngle || '';
-  const sentences = fullText
-    .split(/\.\s+(?=[A-Z0-9])/)
-    .map(s => s.replace(/^\d+[.)]+\s*/, '').replace(/[.!?]+$/, '').trim())
-    .filter(s => s.length > 8);
-  if (sentences.length >= 2) {
-    console.log(`[parseTips] Strategy 3 (sentences): ${sentences.length} tips`);
-    return sentences.slice(0, 5).map(s => sanitizeForDrawtext(s));
+  // Strategy 3: Sentence splitting — works for articles, prose, scraped content
+  // Split on period/exclamation/question followed by space + capital letter
+  const fullText = src || caption || contentAngle || '';
+  if (fullText) {
+    const rawSentences = fullText
+      .replace(/([.!?])\s+/g, '$1\n')
+      .split('\n')
+      .map(s => s.replace(/^\d+[.)]+\s*/, '').replace(/[.!?]+$/, '').trim())
+      .filter(s => s.length > 10);
+
+    if (rawSentences.length >= 2) {
+      // Group short sentences together (under 6 words) to avoid too-brief captions
+      const grouped = [];
+      let buffer = '';
+      let bufWords = 0;
+      for (const s of rawSentences) {
+        const wc = s.split(/\s+/).length;
+        if (buffer && bufWords + wc > 18) {
+          grouped.push({ text: sanitizeForDrawtext(buffer.trim()), words: bufWords });
+          buffer = s;
+          bufWords = wc;
+        } else {
+          buffer = buffer ? buffer + '. ' + s : s;
+          bufWords += wc;
+        }
+      }
+      if (buffer) grouped.push({ text: sanitizeForDrawtext(buffer.trim()), words: bufWords });
+
+      if (grouped.length >= 2) {
+        console.log(`[parseCaptions] Strategy 3 (sentences): ${grouped.length} segments`);
+        return grouped.slice(0, 8);
+      }
+    }
   }
 
   // Fallback: single caption
-  console.log(`[parseTips] Fallback: single caption`);
-  return [sanitizeForDrawtext(caption || contentAngle || 'YFIT AI Fitness Tips')];
+  console.log(`[parseCaptions] Fallback: single caption`);
+  const text = sanitizeForDrawtext(caption || contentAngle || 'YFIT AI Fitness Tips');
+  return [{ text, words: text.split(/\s+/).length }];
 }
 
 // Build timed drawtext filters for cycling captions
-function buildCyclingCaptionFilters(tips, audioDuration, font) {
-  if (tips.length === 0) return [];
+// segments: array of { text, words } — timing is proportional to word count
+function buildCyclingCaptionFilters(segments, audioDuration, font) {
+  if (segments.length === 0) return [];
   const filters = [];
-  const tipDuration = audioDuration / tips.length;
 
-  for (let i = 0; i < tips.length; i++) {
-    const startTime = i * tipDuration;
-    const endTime = (i + 1) * tipDuration;
-    const lines = wrapText(tips[i], 22); // shorter lines for bigger font
+  // Calculate proportional durations based on word count
+  const totalWords = segments.reduce((sum, s) => sum + s.words, 0);
+  let cursor = 0;
+
+  for (let i = 0; i < segments.length; i++) {
+    const proportion = segments[i].words / totalWords;
+    const segDuration = audioDuration * proportion;
+    const startTime = cursor;
+    const endTime = cursor + segDuration;
+    cursor = endTime;
+
+    const lines = wrapText(segments[i].text, 26); // 26 chars per line at smaller font
     const line1 = (lines[0] || '').replace(/:/g, '\\:');
     const line2 = (lines[1] || '').replace(/:/g, '\\:');
+    const line3 = (lines[2] || '').replace(/:/g, '\\:');
 
-    // Main tip line (large, bold, white)
+    // Main caption line — reduced from 58 to 46px
     if (line1) {
       filters.push(
-        `drawtext=fontfile=${font}:text='${line1}':fontsize=58:fontcolor=white:` +
-        `x=(w-text_w)/2:y=h-290:shadowcolor=black@0.9:shadowx=3:shadowy=3:` +
+        `drawtext=fontfile=${font}:text='${line1}':fontsize=46:fontcolor=white:` +
+        `x=(w-text_w)/2:y=h-295:shadowcolor=black@0.9:shadowx=2:shadowy=2:` +
         `enable='between(t,${startTime.toFixed(2)},${endTime.toFixed(2)})'`
       );
     }
-    // Second line if text wraps
     if (line2) {
       filters.push(
-        `drawtext=fontfile=${font}:text='${line2}':fontsize=52:fontcolor=white@0.92:` +
-        `x=(w-text_w)/2:y=h-222:shadowcolor=black@0.9:shadowx=2:shadowy=2:` +
+        `drawtext=fontfile=${font}:text='${line2}':fontsize=44:fontcolor=white@0.95:` +
+        `x=(w-text_w)/2:y=h-240:shadowcolor=black@0.9:shadowx=2:shadowy=2:` +
+        `enable='between(t,${startTime.toFixed(2)},${endTime.toFixed(2)})'`
+      );
+    }
+    if (line3) {
+      filters.push(
+        `drawtext=fontfile=${font}:text='${line3}':fontsize=42:fontcolor=white@0.90:` +
+        `x=(w-text_w)/2:y=h-185:shadowcolor=black@0.9:shadowx=2:shadowy=2:` +
         `enable='between(t,${startTime.toFixed(2)},${endTime.toFixed(2)})'`
       );
     }
@@ -262,7 +308,7 @@ app.post('/assemble', async (req, res) => {
   const firstItem = video_items[0] || {};
   const scriptText = script || firstItem.script || '';
 
-  console.log(`[${jobId}] Starting assembly v2.2. dry_run=${dry_run}, query="${searchQuery}"`);  
+  console.log(`[${jobId}] Starting assembly v2.3. dry_run=${dry_run}, query="${searchQuery}"`);
 
   // Dry run
   if (dry_run) {
@@ -365,9 +411,9 @@ app.post('/assemble', async (req, res) => {
       baseVideoPath = bgPath;
     }
 
-    // Step 4: Parse tips for cycling captions
-    const tips = parseTips(scriptText, caption_text || firstItem.caption || '', content_angle);
-    console.log(`[${jobId}] Parsed ${tips.length} tips for cycling captions`);
+    // Step 4: Parse caption segments for cycling (works for tips lists AND article prose)
+    const segments = parseCaptionSegments(scriptText, caption_text || firstItem.caption || '', content_angle);
+    console.log(`[${jobId}] Parsed ${segments.length} caption segments for cycling`);
 
     // Step 5: Compose final video
     console.log(`[${jobId}] Composing final video with overlays...`);
@@ -377,7 +423,7 @@ app.post('/assemble', async (req, res) => {
     if (logoExists) {
       // Use logo as image overlay via filter_complex
       // Scale logo to 280px wide, place top-left with 30px padding, semi-transparent
-      const cyclingFilters = buildCyclingCaptionFilters(tips, audioDuration, FONT_BOLD);
+      const cyclingFilters = buildCyclingCaptionFilters(segments, audioDuration, FONT_BOLD);
 
       // Bottom bar for captions + CTA
       const staticFilters = [
@@ -415,7 +461,7 @@ app.post('/assemble', async (req, res) => {
     } else {
       // No logo - fallback to text-only branding
       console.log(`[${jobId}] Logo not available, using text branding`);
-      const cyclingFilters = buildCyclingCaptionFilters(tips, audioDuration, FONT_BOLD);
+      const cyclingFilters = buildCyclingCaptionFilters(segments, audioDuration, FONT_BOLD);
       const staticFilters = [
         `eq=brightness=-0.06:contrast=1.05`,
         `drawbox=x=0:y=ih-340:w=iw:h=340:color=black@0.80:t=fill`,
@@ -454,7 +500,7 @@ app.post('/assemble', async (req, res) => {
       video_url: videoUrl,
       video_size_bytes: videoSize,
       pexels_clips_used: pexelsClips.length,
-      tips_count: tips.length,
+      tips_count: segments.length,
       platforms: video_items.map(v => v.platform),
       text_platforms: text_items.map(t => t.platform),
       voiceover_url, content_angle, run_date
