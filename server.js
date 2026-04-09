@@ -32,7 +32,7 @@ app.get('/health', (req, res) => {
     status: 'ok',
     ffmpeg: ffmpegVersion,
     pexels: PEXELS_API_KEY ? 'configured' : 'missing',
-    version: '2.1.0',
+    version: '2.2.0',
     timestamp: new Date().toISOString()
   });
 });
@@ -161,25 +161,45 @@ function wrapText(text, maxChars) {
 
 // Parse script into individual tips/sentences for cycling captions
 function parseTips(script, caption, contentAngle) {
-  // Try to extract numbered tips from script (e.g. "1. Hydrate 2. Warm up 3. Fuel up")
-  const numbered = (script || '').match(/\d+[\.\)]\s*([^0-9\n]{10,80})/g);
-  if (numbered && numbered.length >= 2) {
-    return numbered.slice(0, 5).map(t => sanitizeForDrawtext(t.replace(/^\d+[\.\)]\s*/, '').trim()));
+  const src = (script || '').trim();
+
+  // Strategy 1: Split on "N." or "N)" numbered markers (handles inline lists like "1. tip 2. tip 3. tip")
+  if (src) {
+    // Use a regex that splits BEFORE each number+dot/paren that starts a new tip
+    const parts = src.split(/(?=\b[1-9]\d*[.)\s]\s)/).map(p => p.trim()).filter(p => p.length > 0);
+    const tips = parts
+      .map(p => p.replace(/^\d+[.)]+\s*/, '').trim())  // strip leading "1." or "1)"
+      .filter(t => t.length > 8);
+    if (tips.length >= 2) {
+      console.log(`[parseTips] Strategy 1 (numbered): ${tips.length} tips: ${JSON.stringify(tips)}`);
+      return tips.slice(0, 6).map(t => sanitizeForDrawtext(t));
+    }
   }
 
-  // Try splitting by newlines
-  const lines = (script || '').split(/\n/).map(l => l.trim()).filter(l => l.length > 8 && l.length < 100);
-  if (lines.length >= 2) {
-    return lines.slice(0, 5).map(l => sanitizeForDrawtext(l));
+  // Strategy 2: Split on newlines
+  if (src) {
+    const lines = src.split(/\n/)
+      .map(l => l.replace(/^\d+[.)]+\s*/, '').trim())
+      .filter(l => l.length > 8 && l.length < 120);
+    if (lines.length >= 2) {
+      console.log(`[parseTips] Strategy 2 (newlines): ${lines.length} tips`);
+      return lines.slice(0, 6).map(l => sanitizeForDrawtext(l));
+    }
   }
 
-  // Try splitting by sentences
-  const sentences = (caption || script || contentAngle || '').split(/[.!?]+/).map(s => s.trim()).filter(s => s.length > 8);
+  // Strategy 3: Split caption/script by sentence boundaries (period followed by space+capital)
+  const fullText = caption || src || contentAngle || '';
+  const sentences = fullText
+    .split(/\.\s+(?=[A-Z0-9])/)
+    .map(s => s.replace(/^\d+[.)]+\s*/, '').replace(/[.!?]+$/, '').trim())
+    .filter(s => s.length > 8);
   if (sentences.length >= 2) {
-    return sentences.slice(0, 4).map(s => sanitizeForDrawtext(s));
+    console.log(`[parseTips] Strategy 3 (sentences): ${sentences.length} tips`);
+    return sentences.slice(0, 5).map(s => sanitizeForDrawtext(s));
   }
 
   // Fallback: single caption
+  console.log(`[parseTips] Fallback: single caption`);
   return [sanitizeForDrawtext(caption || contentAngle || 'YFIT AI Fitness Tips')];
 }
 
@@ -242,7 +262,7 @@ app.post('/assemble', async (req, res) => {
   const firstItem = video_items[0] || {};
   const scriptText = script || firstItem.script || '';
 
-  console.log(`[${jobId}] Starting assembly v2.1. dry_run=${dry_run}, query="${searchQuery}"`);
+  console.log(`[${jobId}] Starting assembly v2.2. dry_run=${dry_run}, query="${searchQuery}"`);  
 
   // Dry run
   if (dry_run) {
@@ -448,7 +468,7 @@ app.post('/assemble', async (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`YFIT Video Service v2.1 running on port ${PORT}`);
+  console.log(`YFIT Video Service v2.2 running on port ${PORT}`);
   console.log(`Pexels API: ${PEXELS_API_KEY ? 'configured' : 'NOT configured - set PEXELS_API_KEY'}`);
   console.log(`Logo URL: ${YFIT_LOGO_URL}`);
   try {
