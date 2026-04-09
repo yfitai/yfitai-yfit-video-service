@@ -15,6 +15,9 @@ const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY;
 const API_SECRET = process.env.API_SECRET || 'yfit-video-secret-2026';
 const PEXELS_API_KEY = process.env.PEXELS_API_KEY;
 
+// YFIT logo hosted on Supabase (transparent background PNG)
+const YFIT_LOGO_URL = `${SUPABASE_URL}/storage/v1/object/public/yfit-videos/assets/yfit-logo-transparent.png`;
+
 const TEMP_DIR = '/tmp/yfit-videos';
 if (!fs.existsSync(TEMP_DIR)) fs.mkdirSync(TEMP_DIR, { recursive: true });
 
@@ -29,18 +32,19 @@ app.get('/health', (req, res) => {
     status: 'ok',
     ffmpeg: ffmpegVersion,
     pexels: PEXELS_API_KEY ? 'configured' : 'missing',
-    version: '2.0.0',
+    version: '2.1.0',
     timestamp: new Date().toISOString()
   });
 });
 
-// Download file from URL
+// Download file from URL (follows redirects)
 function downloadFile(url, destPath) {
   return new Promise((resolve, reject) => {
     const file = fs.createWriteStream(destPath);
     const protocol = url.startsWith('https') ? https : http;
     protocol.get(url, (response) => {
       if (response.statusCode === 301 || response.statusCode === 302) {
+        file.close();
         downloadFile(response.headers.location, destPath).then(resolve).catch(reject);
         return;
       }
@@ -124,7 +128,7 @@ async function uploadToSupabase(localPath, storagePath, mimeType) {
   return `${SUPABASE_URL}/storage/v1/object/public/yfit-videos/${encodedPath}`;
 }
 
-// Sanitize text for ffmpeg drawtext
+// Sanitize text for ffmpeg drawtext (removes special chars that break ffmpeg filter syntax)
 function sanitizeForDrawtext(text) {
   return (text || '')
     .replace(/[^\w\s\-.,!?]/g, ' ')
@@ -134,10 +138,11 @@ function sanitizeForDrawtext(text) {
     .replace(/\\/g, '')
     .replace(/\[/g, '(')
     .replace(/\]/g, ')')
+    .replace(/\s+/g, ' ')
     .trim();
 }
 
-// Word-wrap text into lines
+// Word-wrap text into lines of maxChars
 function wrapText(text, maxChars) {
   const words = text.split(' ');
   const lines = [];
@@ -154,6 +159,63 @@ function wrapText(text, maxChars) {
   return lines;
 }
 
+// Parse script into individual tips/sentences for cycling captions
+function parseTips(script, caption, contentAngle) {
+  // Try to extract numbered tips from script (e.g. "1. Hydrate 2. Warm up 3. Fuel up")
+  const numbered = (script || '').match(/\d+[\.\)]\s*([^0-9\n]{10,80})/g);
+  if (numbered && numbered.length >= 2) {
+    return numbered.slice(0, 5).map(t => sanitizeForDrawtext(t.replace(/^\d+[\.\)]\s*/, '').trim()));
+  }
+
+  // Try splitting by newlines
+  const lines = (script || '').split(/\n/).map(l => l.trim()).filter(l => l.length > 8 && l.length < 100);
+  if (lines.length >= 2) {
+    return lines.slice(0, 5).map(l => sanitizeForDrawtext(l));
+  }
+
+  // Try splitting by sentences
+  const sentences = (caption || script || contentAngle || '').split(/[.!?]+/).map(s => s.trim()).filter(s => s.length > 8);
+  if (sentences.length >= 2) {
+    return sentences.slice(0, 4).map(s => sanitizeForDrawtext(s));
+  }
+
+  // Fallback: single caption
+  return [sanitizeForDrawtext(caption || contentAngle || 'YFIT AI Fitness Tips')];
+}
+
+// Build timed drawtext filters for cycling captions
+function buildCyclingCaptionFilters(tips, audioDuration, font) {
+  if (tips.length === 0) return [];
+  const filters = [];
+  const tipDuration = audioDuration / tips.length;
+
+  for (let i = 0; i < tips.length; i++) {
+    const startTime = i * tipDuration;
+    const endTime = (i + 1) * tipDuration;
+    const lines = wrapText(tips[i], 22); // shorter lines for bigger font
+    const line1 = (lines[0] || '').replace(/:/g, '\\:');
+    const line2 = (lines[1] || '').replace(/:/g, '\\:');
+
+    // Main tip line (large, bold, white)
+    if (line1) {
+      filters.push(
+        `drawtext=fontfile=${font}:text='${line1}':fontsize=58:fontcolor=white:` +
+        `x=(w-text_w)/2:y=h-290:shadowcolor=black@0.9:shadowx=3:shadowy=3:` +
+        `enable='between(t,${startTime.toFixed(2)},${endTime.toFixed(2)})'`
+      );
+    }
+    // Second line if text wraps
+    if (line2) {
+      filters.push(
+        `drawtext=fontfile=${font}:text='${line2}':fontsize=52:fontcolor=white@0.92:` +
+        `x=(w-text_w)/2:y=h-222:shadowcolor=black@0.9:shadowx=2:shadowy=2:` +
+        `enable='between(t,${startTime.toFixed(2)},${endTime.toFixed(2)})'`
+      );
+    }
+  }
+  return filters;
+}
+
 // Main assembly endpoint
 app.post('/assemble', async (req, res) => {
   const authHeader = req.headers.authorization || '';
@@ -162,7 +224,7 @@ app.post('/assemble', async (req, res) => {
   }
 
   let {
-    voiceover_url, run_date, content_angle, caption_text,
+    voiceover_url, run_date, content_angle, caption_text, script,
     video_items = [], text_items = [], dry_run = false, pexels_query
   } = req.body;
 
@@ -176,7 +238,11 @@ app.post('/assemble', async (req, res) => {
   const safeAngle = (content_angle || 'workout').replace(/[^a-z0-9\-]/gi, '_').substring(0, 60);
   const searchQuery = pexels_query || content_angle || 'fitness workout';
 
-  console.log(`[${jobId}] Starting assembly v2. dry_run=${dry_run}, query="${searchQuery}"`);
+  // Get script from first video item if not at top level
+  const firstItem = video_items[0] || {};
+  const scriptText = script || firstItem.script || '';
+
+  console.log(`[${jobId}] Starting assembly v2.1. dry_run=${dry_run}, query="${searchQuery}"`);
 
   // Dry run
   if (dry_run) {
@@ -192,8 +258,9 @@ app.post('/assemble', async (req, res) => {
   }
 
   const audioPath = path.join(TEMP_DIR, `${jobId}_audio.mp3`);
+  const logoPath = path.join(TEMP_DIR, `${jobId}_logo.png`);
   const finalPath = path.join(TEMP_DIR, `${jobId}_final.mp4`);
-  const tempFiles = [audioPath, finalPath];
+  const tempFiles = [audioPath, logoPath, finalPath];
 
   try {
     // Step 1: Download voiceover
@@ -202,7 +269,16 @@ app.post('/assemble', async (req, res) => {
     const audioDuration = getAudioDuration(audioPath);
     console.log(`[${jobId}] Audio duration: ${audioDuration}s`);
 
-    // Step 2: Get Pexels clips
+    // Step 2: Download YFIT logo
+    console.log(`[${jobId}] Downloading YFIT logo...`);
+    try {
+      await downloadFile(YFIT_LOGO_URL, logoPath);
+      console.log(`[${jobId}] Logo downloaded OK`);
+    } catch (e) {
+      console.warn(`[${jobId}] Logo download failed: ${e.message} - will skip logo`);
+    }
+
+    // Step 3: Get Pexels clips
     console.log(`[${jobId}] Fetching Pexels clips for: "${searchQuery}"...`);
     const pexelsClips = await getPexelsClips(searchQuery);
     console.log(`[${jobId}] Got ${pexelsClips.length} Pexels clips`);
@@ -269,62 +345,83 @@ app.post('/assemble', async (req, res) => {
       baseVideoPath = bgPath;
     }
 
-    // Step 3: Build caption overlay text
-    const firstItem = video_items[0] || {};
-    const rawCaption = sanitizeForDrawtext(
-      caption_text ||
-      (firstItem.caption || '').split('\n')[0] ||
-      content_angle ||
-      'YFIT AI Fitness Tips'
-    ).substring(0, 120);
+    // Step 4: Parse tips for cycling captions
+    const tips = parseTips(scriptText, caption_text || firstItem.caption || '', content_angle);
+    console.log(`[${jobId}] Parsed ${tips.length} tips for cycling captions`);
 
-    const captionLines = wrapText(rawCaption, 26);
-    const line1 = (captionLines[0] || '').replace(/:/g, '\\:');
-    const line2 = (captionLines[1] || '').replace(/:/g, '\\:');
-    const line3 = (captionLines[2] || '').replace(/:/g, '\\:');
-
-    // Step 4: Compose final video
+    // Step 5: Compose final video
     console.log(`[${jobId}] Composing final video with overlays...`);
 
-    const vfParts = [
-      // Slight darkening for readability
-      `eq=brightness=-0.06:contrast=1.05`,
-      // Top gradient bar
-      `drawbox=x=0:y=0:w=iw:h=230:color=black@0.78:t=fill`,
-      // Bottom gradient bar
-      `drawbox=x=0:y=ih-320:w=iw:h=320:color=black@0.82:t=fill`,
-      // YFIT AI branding
-      `drawtext=fontfile=${FONT_BOLD}:text='YFIT AI':fontsize=80:fontcolor=0x00ff88:x=(w-text_w)/2:y=72:shadowcolor=black:shadowx=3:shadowy=3`,
-      `drawtext=fontfile=${FONT_REGULAR}:text='AI Fitness Coach':fontsize=36:fontcolor=white@0.85:x=(w-text_w)/2:y=168:shadowcolor=black:shadowx=1:shadowy=1`,
-    ];
+    const logoExists = fs.existsSync(logoPath) && fs.statSync(logoPath).size > 1000;
 
-    if (line1) vfParts.push(`drawtext=fontfile=${FONT_BOLD}:text='${line1}':fontsize=54:fontcolor=white:x=(w-text_w)/2:y=h-278:shadowcolor=black:shadowx=2:shadowy=2`);
-    if (line2) vfParts.push(`drawtext=fontfile=${FONT_REGULAR}:text='${line2}':fontsize=48:fontcolor=white:x=(w-text_w)/2:y=h-215:shadowcolor=black:shadowx=2:shadowy=2`);
-    if (line3) vfParts.push(`drawtext=fontfile=${FONT_REGULAR}:text='${line3}':fontsize=48:fontcolor=white:x=(w-text_w)/2:y=h-158:shadowcolor=black:shadowx=2:shadowy=2`);
+    if (logoExists) {
+      // Use logo as image overlay via filter_complex
+      // Scale logo to 280px wide, place top-left with 30px padding, semi-transparent
+      const cyclingFilters = buildCyclingCaptionFilters(tips, audioDuration, FONT_BOLD);
 
-    // CTA
-    vfParts.push(`drawtext=fontfile=${FONT_BOLD}:text='Try free at yfitai.com':fontsize=40:fontcolor=0x00ff88:x=(w-text_w)/2:y=h-82:shadowcolor=black:shadowx=2:shadowy=2`);
+      // Bottom bar for captions + CTA
+      const staticFilters = [
+        `eq=brightness=-0.06:contrast=1.05`,
+        `drawbox=x=0:y=ih-340:w=iw:h=340:color=black@0.80:t=fill`,
+        `drawtext=fontfile=${FONT_BOLD}:text='yfitai.com - Try free':fontsize=38:fontcolor=0x00ff88:x=(w-text_w)/2:y=h-72:shadowcolor=black@0.9:shadowx=2:shadowy=2`,
+      ];
 
-    const vfFilter = vfParts.join(',');
-    const finalCmd = [
-      'ffmpeg -y',
-      `-i "${baseVideoPath}"`,
-      `-i "${audioPath}"`,
-      `-vf "${vfFilter}"`,
-      `-c:v libx264 -preset fast -crf 22`,
-      `-c:a aac -b:a 192k`,
-      `-pix_fmt yuv420p`,
-      `-shortest`,
-      `-movflags +faststart`,
-      `"${finalPath}"`
-    ].join(' ');
+      const allVfFilters = [...staticFilters, ...cyclingFilters].join(',');
 
-    execSync(finalCmd, { timeout: 600000, shell: true });
+      // filter_complex: scale logo, overlay on video, then apply drawtext filters
+      const filterComplex = [
+        `[1:v]scale=260:-1,format=rgba,colorchannelmixer=aa=0.88[logo]`,
+        `[0:v]${allVfFilters}[base]`,
+        `[base][logo]overlay=x=30:y=30[out]`
+      ].join(';');
+
+      const finalCmd = [
+        'ffmpeg -y',
+        `-i "${baseVideoPath}"`,
+        `-i "${logoPath}"`,
+        `-i "${audioPath}"`,
+        `-filter_complex "${filterComplex}"`,
+        `-map "[out]"`,
+        `-map 2:a`,
+        `-c:v libx264 -preset fast -crf 22`,
+        `-c:a aac -b:a 192k`,
+        `-pix_fmt yuv420p`,
+        `-shortest`,
+        `-movflags +faststart`,
+        `"${finalPath}"`
+      ].join(' ');
+
+      execSync(finalCmd, { timeout: 600000, shell: true });
+    } else {
+      // No logo - fallback to text-only branding
+      console.log(`[${jobId}] Logo not available, using text branding`);
+      const cyclingFilters = buildCyclingCaptionFilters(tips, audioDuration, FONT_BOLD);
+      const staticFilters = [
+        `eq=brightness=-0.06:contrast=1.05`,
+        `drawbox=x=0:y=ih-340:w=iw:h=340:color=black@0.80:t=fill`,
+        `drawtext=fontfile=${FONT_BOLD}:text='YFIT AI':fontsize=72:fontcolor=0x00ff88:x=30:y=30:shadowcolor=black:shadowx=3:shadowy=3`,
+        `drawtext=fontfile=${FONT_BOLD}:text='yfitai.com - Try free':fontsize=38:fontcolor=0x00ff88:x=(w-text_w)/2:y=h-72:shadowcolor=black@0.9:shadowx=2:shadowy=2`,
+      ];
+      const vfFilter = [...staticFilters, ...cyclingFilters].join(',');
+      const finalCmd = [
+        'ffmpeg -y',
+        `-i "${baseVideoPath}"`,
+        `-i "${audioPath}"`,
+        `-vf "${vfFilter}"`,
+        `-c:v libx264 -preset fast -crf 22`,
+        `-c:a aac -b:a 192k`,
+        `-pix_fmt yuv420p`,
+        `-shortest`,
+        `-movflags +faststart`,
+        `"${finalPath}"`
+      ].join(' ');
+      execSync(finalCmd, { timeout: 600000, shell: true });
+    }
 
     const videoSize = fs.statSync(finalPath).size;
     console.log(`[${jobId}] Final video: ${videoSize} bytes`);
 
-    // Step 5: Upload to Supabase
+    // Step 6: Upload to Supabase
     const storagePath = `videos/${run_date}_${safeAngle}.mp4`;
     const videoUrl = await uploadToSupabase(finalPath, storagePath, 'video/mp4');
     console.log(`[${jobId}] Uploaded: ${videoUrl}`);
@@ -337,6 +434,7 @@ app.post('/assemble', async (req, res) => {
       video_url: videoUrl,
       video_size_bytes: videoSize,
       pexels_clips_used: pexelsClips.length,
+      tips_count: tips.length,
       platforms: video_items.map(v => v.platform),
       text_platforms: text_items.map(t => t.platform),
       voiceover_url, content_angle, run_date
@@ -350,8 +448,9 @@ app.post('/assemble', async (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`YFIT Video Service v2.0 running on port ${PORT}`);
+  console.log(`YFIT Video Service v2.1 running on port ${PORT}`);
   console.log(`Pexels API: ${PEXELS_API_KEY ? 'configured' : 'NOT configured - set PEXELS_API_KEY'}`);
+  console.log(`Logo URL: ${YFIT_LOGO_URL}`);
   try {
     console.log(`ffmpeg: ${execSync('ffmpeg -version 2>&1 | head -1').toString().trim()}`);
   } catch (e) {
