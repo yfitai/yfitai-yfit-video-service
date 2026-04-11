@@ -18,10 +18,20 @@ const PEXELS_API_KEY = process.env.PEXELS_API_KEY;
 // YFIT logo hosted on Supabase (transparent background PNG)
 const YFIT_LOGO_URL = `${SUPABASE_URL}/storage/v1/object/public/yfit-videos/assets/yfit-logo-transparent.png`;
 
-// Background music track (royalty-free motivational beat)
-const BGM_URL = `${SUPABASE_URL}/storage/v1/object/public/yfit-voiceovers/assets/bgm_motivational.mp3`;
-// FIX #1: Raised BGM to 35% — loudnorm was crushing it at 15%. 35% is clearly audible under voice.
-const BGM_VOLUME = 0.35;
+// Background music pool — 5 royalty-free tracks, one picked randomly each run
+const BGM_URLS = [
+  `${SUPABASE_URL}/storage/v1/object/public/yfit-voiceovers/assets/bgm_motivational.mp3`,
+  `${SUPABASE_URL}/storage/v1/object/public/yfit-voiceovers/assets/bgm_energetic.mp3`,
+  `${SUPABASE_URL}/storage/v1/object/public/yfit-voiceovers/assets/bgm_upbeat.mp3`,
+  `${SUPABASE_URL}/storage/v1/object/public/yfit-voiceovers/assets/bgm_deep.mp3`,
+  `${SUPABASE_URL}/storage/v1/object/public/yfit-voiceovers/assets/bgm_bright.mp3`,
+];
+// Pick a random BGM track each run for variety
+function getRandomBgmUrl() {
+  return BGM_URLS[Math.floor(Math.random() * BGM_URLS.length)];
+}
+// FIX v2.7: Raised BGM to 45% — 35% was audible but slightly faint. 45% gives a clearer presence.
+const BGM_VOLUME = 0.45;
 
 const TEMP_DIR = '/tmp/yfit-videos';
 if (!fs.existsSync(TEMP_DIR)) fs.mkdirSync(TEMP_DIR, { recursive: true });
@@ -37,7 +47,7 @@ app.get('/health', (req, res) => {
     status: 'ok',
     ffmpeg: ffmpegVersion,
     pexels: PEXELS_API_KEY ? 'configured' : 'missing',
-    version: '2.6.0',
+    version: '2.7.0',
     timestamp: new Date().toISOString()
   });
 });
@@ -482,11 +492,12 @@ app.post('/assemble', async (req, res) => {
       console.warn(`[${jobId}] Logo download failed: ${e.message} - will skip logo`);
     }
 
-    // Step 2b: Download background music
-    console.log(`[${jobId}] Downloading background music...`);
+    // Step 2b: Download background music — randomly selected from pool
+    const selectedBgmUrl = getRandomBgmUrl();
+    console.log(`[${jobId}] Downloading background music: ${selectedBgmUrl.split('/').pop()}...`);
     let bgmExists = false;
     try {
-      await downloadFile(BGM_URL, bgmPath);
+      await downloadFile(selectedBgmUrl, bgmPath);
       const bgmSize = fs.statSync(bgmPath).size;
       bgmExists = bgmSize > 10000;
       console.log(`[${jobId}] BGM downloaded: ${bgmSize} bytes, valid=${bgmExists}`);
@@ -513,13 +524,14 @@ app.post('/assemble', async (req, res) => {
         try {
           console.log(`[${jobId}] Downloading clip ${i+1}/${numClips}...`);
           await downloadFile(pexelsClips[i].url, rawPath);
-          // FIX #4: Removed brightness=-0.06 darkening filter from clip trimming.
-          // Clips are now kept at natural brightness. The overlay drawbox handles contrast.
+          // FIX v2.7: Added brightness=0.06 boost to all clips to compensate for dark Pexels clips.
+          // The first clip was consistently dark because Pexels sometimes returns underexposed footage.
+          // A +0.06 lift brightens dark clips noticeably without overexposing already-bright ones.
           const trimCmd = [
             'ffmpeg -y',
             `-i "${rawPath}"`,
             `-t ${clipDuration.toFixed(2)}`,
-            `-vf "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1"`,
+            `-vf "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1,eq=brightness=0.06:contrast=1.05"`,
             `-c:v libx264 -preset fast -pix_fmt yuv420p -an -r 30`,
             `"${trimPath}"`
           ].join(' ');
