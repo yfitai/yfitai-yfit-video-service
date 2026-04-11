@@ -32,7 +32,7 @@ app.get('/health', (req, res) => {
     status: 'ok',
     ffmpeg: ffmpegVersion,
     pexels: PEXELS_API_KEY ? 'configured' : 'missing',
-    version: '2.3.0',
+    version: '2.4.0',
     timestamp: new Date().toISOString()
   });
 });
@@ -164,14 +164,28 @@ function wrapText(text, maxChars) {
 function parseCaptionSegments(script, caption, contentAngle) {
   const src = (script || '').trim();
 
-  // Strategy 1: Numbered list markers ("1. tip 2. tip 3. tip")
+  // Strategy 1: Numbered list markers — handles both "1. tip" and "Number one: tip" formats
   if (src) {
+    // First try word-form numbers: "Number one", "Number two", etc.
+    const wordNumRegex = /(?=\b(?:number\s+(?:one|two|three|four|five|six)|tip\s+(?:one|two|three|four|five|six)|step\s+(?:one|two|three|four|five|six))\b)/i;
+    const wordParts = src.split(wordNumRegex).map(p => p.trim()).filter(p => p.length > 0);
+    const wordTips = wordParts
+      .map(p => p.replace(/^(?:number|tip|step)\s+(?:one|two|three|four|five|six)[:\s]*/i, '').trim())
+      .filter(t => t.length > 8);
+    if (wordTips.length >= 2) {
+      console.log(`[parseCaptions] Strategy 1a (word numbers): ${wordTips.length} segments`);
+      return wordTips.slice(0, 6).map(t => ({
+        text: sanitizeForDrawtext(t),
+        words: t.split(/\s+/).length
+      }));
+    }
+    // Then try numeric markers: "1. tip" or "2) tip"
     const parts = src.split(/(?=\b[1-9]\d*[.)\s]\s)/).map(p => p.trim()).filter(p => p.length > 0);
     const tips = parts
       .map(p => p.replace(/^\d+[.)]+\s*/, '').trim())
       .filter(t => t.length > 8);
     if (tips.length >= 2) {
-      console.log(`[parseCaptions] Strategy 1 (numbered): ${tips.length} segments`);
+      console.log(`[parseCaptions] Strategy 1b (numeric): ${tips.length} segments`);
       return tips.slice(0, 6).map(t => ({
         text: sanitizeForDrawtext(t),
         words: t.split(/\s+/).length
@@ -450,7 +464,7 @@ app.post('/assemble', async (req, res) => {
         `-map "[out]"`,
         `-map 2:a`,
         `-c:v libx264 -preset fast -crf 22`,
-        `-c:a aac -b:a 192k`,
+        `-c:a aac -b:a 192k -af "loudnorm=I=-14:TP=-1.5:LRA=11"`,
         `-pix_fmt yuv420p`,
         `-shortest`,
         `-movflags +faststart`,
@@ -475,7 +489,7 @@ app.post('/assemble', async (req, res) => {
         `-i "${audioPath}"`,
         `-vf "${vfFilter}"`,
         `-c:v libx264 -preset fast -crf 22`,
-        `-c:a aac -b:a 192k`,
+        `-c:a aac -b:a 192k -af "loudnorm=I=-14:TP=-1.5:LRA=11"`,
         `-pix_fmt yuv420p`,
         `-shortest`,
         `-movflags +faststart`,
