@@ -18,6 +18,10 @@ const PEXELS_API_KEY = process.env.PEXELS_API_KEY;
 // YFIT logo hosted on Supabase (transparent background PNG)
 const YFIT_LOGO_URL = `${SUPABASE_URL}/storage/v1/object/public/yfit-videos/assets/yfit-logo-transparent.png`;
 
+// Background music track (royalty-free motivational beat, 60s loops automatically)
+const BGM_URL = `${SUPABASE_URL}/storage/v1/object/public/yfit-voiceovers/assets/bgm_motivational.mp3`;
+const BGM_VOLUME = 0.15; // 15% volume — audible but clearly behind voiceover
+
 const TEMP_DIR = '/tmp/yfit-videos';
 if (!fs.existsSync(TEMP_DIR)) fs.mkdirSync(TEMP_DIR, { recursive: true });
 
@@ -32,7 +36,7 @@ app.get('/health', (req, res) => {
     status: 'ok',
     ffmpeg: ffmpegVersion,
     pexels: PEXELS_API_KEY ? 'configured' : 'missing',
-    version: '2.4.0',
+    version: '2.5.0',
     timestamp: new Date().toISOString()
   });
 });
@@ -384,9 +388,10 @@ app.post('/assemble', async (req, res) => {
   }
 
   const audioPath = path.join(TEMP_DIR, `${jobId}_audio.mp3`);
+  const bgmPath = path.join(TEMP_DIR, `${jobId}_bgm.mp3`);
   const logoPath = path.join(TEMP_DIR, `${jobId}_logo.png`);
   const finalPath = path.join(TEMP_DIR, `${jobId}_final.mp4`);
-  const tempFiles = [audioPath, logoPath, finalPath];
+  const tempFiles = [audioPath, bgmPath, logoPath, finalPath];
 
   try {
     // Step 1: Download voiceover
@@ -402,6 +407,18 @@ app.post('/assemble', async (req, res) => {
       console.log(`[${jobId}] Logo downloaded OK`);
     } catch (e) {
       console.warn(`[${jobId}] Logo download failed: ${e.message} - will skip logo`);
+    }
+
+    // Step 2b: Download background music
+    console.log(`[${jobId}] Downloading background music...`);
+    let bgmExists = false;
+    try {
+      await downloadFile(BGM_URL, bgmPath);
+      const bgmSize = fs.statSync(bgmPath).size;
+      bgmExists = bgmSize > 10000; // Must be a real file, not an error page
+      console.log(`[${jobId}] BGM downloaded: ${bgmSize} bytes, valid=${bgmExists}`);
+    } catch (e) {
+      console.warn(`[${jobId}] BGM download failed: ${e.message} - will skip BGM`);
     }
 
     // Step 3: Get Pexels clips
@@ -501,21 +518,47 @@ app.post('/assemble', async (req, res) => {
         `[base][logo]overlay=x=30:y=30[out]`
       ].join(';');
 
-      const finalCmd = [
-        'ffmpeg -y',
-        `-i "${baseVideoPath}"`,
-        `-i "${logoPath}"`,
-        `-i "${audioPath}"`,
-        `-filter_complex "${filterComplex}"`,
-        `-map "[out]"`,
-        `-map 2:a`,
-        `-c:v libx264 -preset fast -crf 22`,
-        `-c:a aac -b:a 192k -af "loudnorm=I=-14:TP=-1.5:LRA=11"`,
-        `-pix_fmt yuv420p`,
-        `-shortest`,
-        `-movflags +faststart`,
-        `"${finalPath}"`
-      ].join(' ');
+      let finalCmd;
+      if (bgmExists) {
+        // Mix BGM at BGM_VOLUME under voiceover using amix
+        const audioFilterComplex = [
+          filterComplex,
+          `[2:a]volume=${BGM_VOLUME},aloop=loop=-1:size=2e+09[bgm]`,
+          `[3:a][bgm]amix=inputs=2:duration=first:weights=1 ${BGM_VOLUME}[aout]`
+        ].join(';');
+        finalCmd = [
+          'ffmpeg -y',
+          `-i "${baseVideoPath}"`,
+          `-i "${logoPath}"`,
+          `-i "${bgmPath}"`,
+          `-i "${audioPath}"`,
+          `-filter_complex "${audioFilterComplex}"`,
+          `-map "[out]"`,
+          `-map "[aout]"`,
+          `-c:v libx264 -preset fast -crf 22`,
+          `-c:a aac -b:a 192k -af "loudnorm=I=-14:TP=-1.5:LRA=11"`,
+          `-pix_fmt yuv420p`,
+          `-shortest`,
+          `-movflags +faststart`,
+          `"${finalPath}"`
+        ].join(' ');
+      } else {
+        finalCmd = [
+          'ffmpeg -y',
+          `-i "${baseVideoPath}"`,
+          `-i "${logoPath}"`,
+          `-i "${audioPath}"`,
+          `-filter_complex "${filterComplex}"`,
+          `-map "[out]"`,
+          `-map 2:a`,
+          `-c:v libx264 -preset fast -crf 22`,
+          `-c:a aac -b:a 192k -af "loudnorm=I=-14:TP=-1.5:LRA=11"`,
+          `-pix_fmt yuv420p`,
+          `-shortest`,
+          `-movflags +faststart`,
+          `"${finalPath}"`
+        ].join(' ');
+      }
 
       execSync(finalCmd, { timeout: 600000, shell: true });
     } else {
@@ -529,18 +572,38 @@ app.post('/assemble', async (req, res) => {
         `drawtext=fontfile=${FONT_BOLD}:text='yfitai.com - Try free':fontsize=38:fontcolor=0x00ff88:x=(w-text_w)/2:y=h-72:shadowcolor=black@0.9:shadowx=2:shadowy=2`,
       ];
       const vfFilter = [...staticFilters, ...cyclingFilters].join(',');
-      const finalCmd = [
-        'ffmpeg -y',
-        `-i "${baseVideoPath}"`,
-        `-i "${audioPath}"`,
-        `-vf "${vfFilter}"`,
-        `-c:v libx264 -preset fast -crf 22`,
-        `-c:a aac -b:a 192k -af "loudnorm=I=-14:TP=-1.5:LRA=11"`,
-        `-pix_fmt yuv420p`,
-        `-shortest`,
-        `-movflags +faststart`,
-        `"${finalPath}"`
-      ].join(' ');
+      let finalCmd;
+      if (bgmExists) {
+        finalCmd = [
+          'ffmpeg -y',
+          `-i "${baseVideoPath}"`,
+          `-i "${bgmPath}"`,
+          `-i "${audioPath}"`,
+          `-filter_complex "[1:a]volume=${BGM_VOLUME},aloop=loop=-1:size=2e+09[bgm];[2:a][bgm]amix=inputs=2:duration=first:weights=1 ${BGM_VOLUME}[aout]"`,
+          `-map 0:v`,
+          `-map "[aout]"`,
+          `-vf "${vfFilter}"`,
+          `-c:v libx264 -preset fast -crf 22`,
+          `-c:a aac -b:a 192k -af "loudnorm=I=-14:TP=-1.5:LRA=11"`,
+          `-pix_fmt yuv420p`,
+          `-shortest`,
+          `-movflags +faststart`,
+          `"${finalPath}"`
+        ].join(' ');
+      } else {
+        finalCmd = [
+          'ffmpeg -y',
+          `-i "${baseVideoPath}"`,
+          `-i "${audioPath}"`,
+          `-vf "${vfFilter}"`,
+          `-c:v libx264 -preset fast -crf 22`,
+          `-c:a aac -b:a 192k -af "loudnorm=I=-14:TP=-1.5:LRA=11"`,
+          `-pix_fmt yuv420p`,
+          `-shortest`,
+          `-movflags +faststart`,
+          `"${finalPath}"`
+        ].join(' ');
+      }
       execSync(finalCmd, { timeout: 600000, shell: true });
     }
 
