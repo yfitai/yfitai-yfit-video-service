@@ -524,7 +524,8 @@ app.post('/assemble', async (req, res) => {
         const audioFilterComplex = [
           filterComplex,
           `[2:a]volume=${BGM_VOLUME},aloop=loop=-1:size=2e+09[bgm]`,
-          `[3:a][bgm]amix=inputs=2:duration=first:weights=1 ${BGM_VOLUME}[aout]`
+          `[3:a][bgm]amix=inputs=2:duration=first:weights=1|${BGM_VOLUME}[amixed]`,
+          `[amixed]loudnorm=I=-14:TP=-1.5:LRA=11[aout]`
         ].join(';');
         finalCmd = [
           'ffmpeg -y',
@@ -536,7 +537,7 @@ app.post('/assemble', async (req, res) => {
           `-map "[out]"`,
           `-map "[aout]"`,
           `-c:v libx264 -preset fast -crf 22`,
-          `-c:a aac -b:a 192k -af "loudnorm=I=-14:TP=-1.5:LRA=11"`,
+          `-c:a aac -b:a 192k`,
           `-pix_fmt yuv420p`,
           `-shortest`,
           `-movflags +faststart`,
@@ -579,12 +580,12 @@ app.post('/assemble', async (req, res) => {
           `-i "${baseVideoPath}"`,
           `-i "${bgmPath}"`,
           `-i "${audioPath}"`,
-          `-filter_complex "[1:a]volume=${BGM_VOLUME},aloop=loop=-1:size=2e+09[bgm];[2:a][bgm]amix=inputs=2:duration=first:weights=1 ${BGM_VOLUME}[aout]"`,
+          `-filter_complex "[1:a]volume=${BGM_VOLUME},aloop=loop=-1:size=2e+09[bgm];[2:a][bgm]amix=inputs=2:duration=first:weights=1|${BGM_VOLUME}[amixed];[amixed]loudnorm=I=-14:TP=-1.5:LRA=11[aout]"`,
           `-map 0:v`,
           `-map "[aout]"`,
           `-vf "${vfFilter}"`,
           `-c:v libx264 -preset fast -crf 22`,
-          `-c:a aac -b:a 192k -af "loudnorm=I=-14:TP=-1.5:LRA=11"`,
+          `-c:a aac -b:a 192k`,
           `-pix_fmt yuv420p`,
           `-shortest`,
           `-movflags +faststart`,
@@ -637,7 +638,7 @@ app.post('/assemble', async (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`YFIT Video Service v2.2 running on port ${PORT}`);
+  console.log(`YFIT Video Service v2.5.1 running on port ${PORT}`);
   console.log(`Pexels API: ${PEXELS_API_KEY ? 'configured' : 'NOT configured - set PEXELS_API_KEY'}`);
   console.log(`Logo URL: ${YFIT_LOGO_URL}`);
   try {
