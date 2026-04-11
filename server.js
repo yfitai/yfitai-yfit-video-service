@@ -47,7 +47,7 @@ app.get('/health', (req, res) => {
     status: 'ok',
     ffmpeg: ffmpegVersion,
     pexels: PEXELS_API_KEY ? 'configured' : 'missing',
-    version: '2.7.0',
+    version: '2.8.0',
     timestamp: new Date().toISOString()
   });
 });
@@ -524,14 +524,36 @@ app.post('/assemble', async (req, res) => {
         try {
           console.log(`[${jobId}] Downloading clip ${i+1}/${numClips}...`);
           await downloadFile(pexelsClips[i].url, rawPath);
-          // FIX v2.7: Added brightness=0.06 boost to all clips to compensate for dark Pexels clips.
-          // The first clip was consistently dark because Pexels sometimes returns underexposed footage.
-          // A +0.06 lift brightens dark clips noticeably without overexposing already-bright ones.
+          // FIX v2.8: Detect clip brightness and apply targeted boost only for dark clips.
+          // Flat brightness boost on all clips caused BGM audio to drop in some ffmpeg versions.
+          // Instead: measure average luma of first 1 second, boost if below threshold.
+          let brightnessFilter = 'scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1';
+          try {
+            const lumaResult = execSync(
+              `ffprobe -v error -select_streams v:0 -vframes 30 -vf "signalstats" -show_entries frame_tags=lavfi.signalstats.YAVG -of default=noprint_wrappers=1:nokey=1 "${rawPath}" 2>&1 | head -5`,
+              { timeout: 15000, shell: true }
+            ).toString().trim();
+            const lumaValues = lumaResult.split('\n').map(v => parseFloat(v)).filter(v => !isNaN(v));
+            const avgLuma = lumaValues.length > 0 ? lumaValues.reduce((a, b) => a + b, 0) / lumaValues.length : 128;
+            console.log(`[${jobId}] Clip ${i+1} avg luma: ${avgLuma.toFixed(1)}`);
+            if (avgLuma < 60) {
+              // Very dark clip — apply strong brightness boost
+              brightnessFilter += ',eq=brightness=0.15:contrast=1.1';
+              console.log(`[${jobId}] Clip ${i+1} is dark (luma=${avgLuma.toFixed(1)}) — applying +0.15 brightness boost`);
+            } else if (avgLuma < 90) {
+              // Moderately dark — apply mild boost
+              brightnessFilter += ',eq=brightness=0.07:contrast=1.05';
+              console.log(`[${jobId}] Clip ${i+1} is slightly dark (luma=${avgLuma.toFixed(1)}) — applying +0.07 brightness boost`);
+            }
+            // Bright clips (luma >= 90): no adjustment needed
+          } catch (lumaErr) {
+            console.warn(`[${jobId}] Clip ${i+1} luma check failed: ${lumaErr.message} — using no brightness adjustment`);
+          }
           const trimCmd = [
             'ffmpeg -y',
             `-i "${rawPath}"`,
             `-t ${clipDuration.toFixed(2)}`,
-            `-vf "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1,eq=brightness=0.06:contrast=1.05"`,
+            `-vf "${brightnessFilter}"`,
             `-c:v libx264 -preset fast -pix_fmt yuv420p -an -r 30`,
             `"${trimPath}"`
           ].join(' ');
@@ -725,7 +747,7 @@ app.post('/assemble', async (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`YFIT Video Service v2.6.0 running on port ${PORT}`);
+  console.log(`YFIT Video Service v2.8.0 running on port ${PORT}`);
   console.log(`Pexels API: ${PEXELS_API_KEY ? 'configured' : 'NOT configured - set PEXELS_API_KEY'}`);
   console.log(`Logo URL: ${YFIT_LOGO_URL}`);
   try {
