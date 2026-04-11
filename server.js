@@ -160,7 +160,7 @@ function wrapText(text, maxChars) {
 }
 
 // Parse script/article into caption segments for cycling
-// Returns array of { text, words } objects — words used for proportional timing
+// Returns array of { text, startWord, endWord } objects — startWord/endWord are indices into word_timing array
 function parseCaptionSegments(script, caption, contentAngle) {
   const src = (script || '').trim();
 
@@ -188,6 +188,7 @@ function parseCaptionSegments(script, caption, contentAngle) {
       console.log(`[parseCaptions] Strategy 1b (numeric): ${tips.length} segments`);
       return tips.slice(0, 6).map(t => ({
         text: sanitizeForDrawtext(t),
+        rawText: t,
         words: t.split(/\s+/).length
       }));
     }
@@ -202,6 +203,7 @@ function parseCaptionSegments(script, caption, contentAngle) {
       console.log(`[parseCaptions] Strategy 2 (newlines): ${lines.length} segments`);
       return lines.slice(0, 8).map(l => ({
         text: sanitizeForDrawtext(l),
+        rawText: l,
         words: l.split(/\s+/).length
       }));
     }
@@ -237,7 +239,7 @@ function parseCaptionSegments(script, caption, contentAngle) {
 
       if (grouped.length >= 2) {
         console.log(`[parseCaptions] Strategy 3 (sentences): ${grouped.length} segments`);
-        return grouped.slice(0, 8);
+        return grouped.slice(0, 8).map(g => ({ ...g, rawText: g.text }));
       }
     }
   }
@@ -245,32 +247,73 @@ function parseCaptionSegments(script, caption, contentAngle) {
   // Fallback: single caption
   console.log(`[parseCaptions] Fallback: single caption`);
   const text = sanitizeForDrawtext(caption || contentAngle || 'YFIT AI Fitness Tips');
-  return [{ text, words: text.split(/\s+/).length }];
+  return [{ text, rawText: text, words: text.split(/\s+/).length }];
 }
 
 // Build timed drawtext filters for cycling captions
-// segments: array of { text, words } — timing is proportional to word count
-function buildCyclingCaptionFilters(segments, audioDuration, font) {
+// If wordTiming is provided (array of {word, start, end}), uses exact speech timestamps.
+// Falls back to proportional word-count estimation if wordTiming is absent.
+function buildCyclingCaptionFilters(segments, audioDuration, font, wordTiming) {
   if (segments.length === 0) return [];
   const filters = [];
 
-  // Calculate proportional durations based on word count
-  const totalWords = segments.reduce((sum, s) => sum + s.words, 0);
-  let cursor = 0;
+  let segmentTimings;
 
+  if (wordTiming && wordTiming.length > 0) {
+    // ── Exact timing from ElevenLabs word-level timestamps ──────────────────
+    console.log(`[captions] Using ElevenLabs word timing (${wordTiming.length} words)`);
+
+    // Build a flat array of all words from all segments in order
+    // Match each segment's words to the wordTiming array by position
+    const allSegmentWords = segments.map(s => (s.rawText || s.text).split(/\s+/).filter(w => w.length > 0));
+    const totalSegWords = allSegmentWords.reduce((sum, ws) => sum + ws.length, 0);
+
+    // Map word timing indices to segments
+    // wordTiming may have punctuation attached — we match by count, not by text
+    let wordIdx = 0;
+    segmentTimings = segments.map((seg, si) => {
+      const segWordCount = allSegmentWords[si].length;
+      const segStart = wordIdx < wordTiming.length ? (wordTiming[wordIdx].start || 0) : audioDuration * (wordIdx / totalSegWords);
+      const endIdx = Math.min(wordIdx + segWordCount - 1, wordTiming.length - 1);
+      const segEnd = endIdx >= 0 ? (wordTiming[endIdx].end || segStart + 1) : segStart + 1;
+      wordIdx += segWordCount;
+      return { startTime: segStart, endTime: segEnd };
+    });
+
+    // Extend last segment to full audio duration to avoid gap at end
+    if (segmentTimings.length > 0) {
+      segmentTimings[segmentTimings.length - 1].endTime = audioDuration;
+    }
+
+    console.log(`[captions] Segment timings:`);
+    segmentTimings.forEach((t, i) => {
+      console.log(`  [${i}] ${t.startTime.toFixed(2)}s → ${t.endTime.toFixed(2)}s: "${segments[i].text.substring(0, 40)}"`);
+    });
+
+  } else {
+    // ── Fallback: proportional word-count estimation ─────────────────────────
+    console.log(`[captions] No word timing — using proportional estimation`);
+    const totalWords = segments.reduce((sum, s) => sum + s.words, 0);
+    let cursor = 0;
+    segmentTimings = segments.map(seg => {
+      const proportion = seg.words / totalWords;
+      const segDuration = audioDuration * proportion;
+      const startTime = cursor;
+      const endTime = cursor + segDuration;
+      cursor = endTime;
+      return { startTime, endTime };
+    });
+  }
+
+  // Build drawtext filters from computed timings
   for (let i = 0; i < segments.length; i++) {
-    const proportion = segments[i].words / totalWords;
-    const segDuration = audioDuration * proportion;
-    const startTime = cursor;
-    const endTime = cursor + segDuration;
-    cursor = endTime;
+    const { startTime, endTime } = segmentTimings[i];
 
-    const lines = wrapText(segments[i].text, 26); // 26 chars per line at smaller font
+    const lines = wrapText(segments[i].text, 26);
     const line1 = (lines[0] || '').replace(/:/g, '\\:');
     const line2 = (lines[1] || '').replace(/:/g, '\\:');
     const line3 = (lines[2] || '').replace(/:/g, '\\:');
 
-    // Main caption line — reduced from 58 to 46px
     if (line1) {
       filters.push(
         `drawtext=fontfile=${font}:text='${line1}':fontsize=46:fontcolor=white:` +
@@ -305,8 +348,11 @@ app.post('/assemble', async (req, res) => {
 
   let {
     voiceover_url, run_date, content_angle, caption_text, script,
-    video_items = [], text_items = [], dry_run = false, pexels_query
+    video_items = [], text_items = [], dry_run = false, pexels_query,
+    word_timing = []
   } = req.body;
+
+  if (typeof word_timing === 'string') { try { word_timing = JSON.parse(word_timing); } catch(e) { word_timing = []; } }
 
   if (typeof video_items === 'string') { try { video_items = JSON.parse(video_items); } catch(e) { video_items = []; } }
   if (typeof text_items === 'string') { try { text_items = JSON.parse(text_items); } catch(e) { text_items = []; } }
@@ -437,7 +483,7 @@ app.post('/assemble', async (req, res) => {
     if (logoExists) {
       // Use logo as image overlay via filter_complex
       // Scale logo to 280px wide, place top-left with 30px padding, semi-transparent
-      const cyclingFilters = buildCyclingCaptionFilters(segments, audioDuration, FONT_BOLD);
+      const cyclingFilters = buildCyclingCaptionFilters(segments, audioDuration, FONT_BOLD, word_timing);
 
       // Bottom bar for captions + CTA
       const staticFilters = [
@@ -475,7 +521,7 @@ app.post('/assemble', async (req, res) => {
     } else {
       // No logo - fallback to text-only branding
       console.log(`[${jobId}] Logo not available, using text branding`);
-      const cyclingFilters = buildCyclingCaptionFilters(segments, audioDuration, FONT_BOLD);
+      const cyclingFilters = buildCyclingCaptionFilters(segments, audioDuration, FONT_BOLD, word_timing);
       const staticFilters = [
         `eq=brightness=-0.06:contrast=1.05`,
         `drawbox=x=0:y=ih-340:w=iw:h=340:color=black@0.80:t=fill`,
