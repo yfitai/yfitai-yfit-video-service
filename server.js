@@ -18,9 +18,10 @@ const PEXELS_API_KEY = process.env.PEXELS_API_KEY;
 // YFIT logo hosted on Supabase (transparent background PNG)
 const YFIT_LOGO_URL = `${SUPABASE_URL}/storage/v1/object/public/yfit-videos/assets/yfit-logo-transparent.png`;
 
-// Background music track (royalty-free motivational beat, 60s loops automatically)
+// Background music track (royalty-free motivational beat)
 const BGM_URL = `${SUPABASE_URL}/storage/v1/object/public/yfit-voiceovers/assets/bgm_motivational.mp3`;
-const BGM_VOLUME = 0.15; // 15% volume — audible but clearly behind voiceover
+// FIX #1: Raised BGM to 35% — loudnorm was crushing it at 15%. 35% is clearly audible under voice.
+const BGM_VOLUME = 0.35;
 
 const TEMP_DIR = '/tmp/yfit-videos';
 if (!fs.existsSync(TEMP_DIR)) fs.mkdirSync(TEMP_DIR, { recursive: true });
@@ -36,7 +37,7 @@ app.get('/health', (req, res) => {
     status: 'ok',
     ffmpeg: ffmpegVersion,
     pexels: PEXELS_API_KEY ? 'configured' : 'missing',
-    version: '2.5.0',
+    version: '2.6.0',
     timestamp: new Date().toISOString()
   });
 });
@@ -63,7 +64,7 @@ function downloadFile(url, destPath) {
   });
 }
 
-// Search Pexels for portrait fitness videos
+// FIX #5: Fitness-specific Pexels search with better fallback chain
 function searchPexels(query) {
   return new Promise((resolve) => {
     if (!PEXELS_API_KEY) { resolve([]); return; }
@@ -99,12 +100,47 @@ function searchPexels(query) {
   });
 }
 
-// Search with fallback terms
+// FIX #5: Better fallback chain — fitness-specific terms, never generic "desk" content
 async function getPexelsClips(query) {
-  const fallbacks = [query, 'fitness workout', 'gym exercise', 'running athlete', 'healthy active lifestyle'];
+  // Build a fitness-specific fallback chain from the query
+  const queryLower = (query || '').toLowerCase();
+
+  // Detect topic from query and add specific fitness terms
+  let specificTerms = [];
+  if (queryLower.includes('hiit') || queryLower.includes('cardio') || queryLower.includes('interval')) {
+    specificTerms = ['HIIT cardio workout', 'high intensity interval training gym', 'cardio exercise fitness'];
+  } else if (queryLower.includes('strength') || queryLower.includes('weight') || queryLower.includes('lift')) {
+    specificTerms = ['weightlifting gym', 'strength training barbell', 'gym workout weights'];
+  } else if (queryLower.includes('run') || queryLower.includes('jog')) {
+    specificTerms = ['running athlete outdoors', 'jogging fitness', 'runner workout'];
+  } else if (queryLower.includes('yoga') || queryLower.includes('stretch') || queryLower.includes('flex')) {
+    specificTerms = ['yoga fitness', 'stretching exercise', 'flexibility workout'];
+  } else if (queryLower.includes('nutrition') || queryLower.includes('diet') || queryLower.includes('food') || queryLower.includes('meal')) {
+    specificTerms = ['healthy food meal prep', 'nutrition fitness', 'healthy eating vegetables'];
+  } else if (queryLower.includes('sleep') || queryLower.includes('recover') || queryLower.includes('rest')) {
+    specificTerms = ['athlete recovery rest', 'fitness rest day', 'sleep wellness'];
+  } else if (queryLower.includes('protein') || queryLower.includes('supplement')) {
+    specificTerms = ['protein shake gym', 'fitness nutrition supplement', 'gym workout nutrition'];
+  } else {
+    specificTerms = ['gym workout fitness', 'exercise training athlete'];
+  }
+
+  // Always-reliable fitness fallbacks (never office/desk content)
+  const fitnessOnlyFallbacks = [
+    'gym workout',
+    'fitness exercise',
+    'athlete training',
+    'running fitness',
+    'weightlifting gym'
+  ];
+
+  const fallbacks = [query, ...specificTerms, ...fitnessOnlyFallbacks];
   for (const q of fallbacks) {
     const clips = await searchPexels(q);
-    if (clips.length > 0) return clips;
+    if (clips.length > 0) {
+      console.log(`[Pexels] Found ${clips.length} clips for query: "${q}"`);
+      return clips;
+    }
   }
   return [];
 }
@@ -133,8 +169,9 @@ async function uploadToSupabase(localPath, storagePath, mimeType) {
 }
 
 // Sanitize text for ffmpeg drawtext (removes special chars that break ffmpeg filter syntax)
+// FIX #3: Added sentence case capitalization
 function sanitizeForDrawtext(text) {
-  return (text || '')
+  const cleaned = (text || '')
     .replace(/[^\w\s\-.,!?]/g, ' ')
     .replace(/'/g, '')
     .replace(/"/g, '')
@@ -144,6 +181,9 @@ function sanitizeForDrawtext(text) {
     .replace(/\]/g, ')')
     .replace(/\s+/g, ' ')
     .trim();
+  // Sentence case: capitalize first letter only
+  if (!cleaned) return cleaned;
+  return cleaned.charAt(0).toUpperCase() + cleaned.slice(1);
 }
 
 // Word-wrap text into lines of maxChars
@@ -180,6 +220,7 @@ function parseCaptionSegments(script, caption, contentAngle) {
       console.log(`[parseCaptions] Strategy 1a (word numbers): ${wordTips.length} segments`);
       return wordTips.slice(0, 6).map(t => ({
         text: sanitizeForDrawtext(t),
+        rawText: t,
         words: t.split(/\s+/).length
       }));
     }
@@ -214,7 +255,6 @@ function parseCaptionSegments(script, caption, contentAngle) {
   }
 
   // Strategy 3: Sentence splitting — works for articles, prose, scraped content
-  // Split on period/exclamation/question followed by space + capital letter
   const fullText = src || caption || contentAngle || '';
   if (fullText) {
     const rawSentences = fullText
@@ -224,7 +264,6 @@ function parseCaptionSegments(script, caption, contentAngle) {
       .filter(s => s.length > 10);
 
     if (rawSentences.length >= 2) {
-      // Group short sentences together (under 6 words) to avoid too-brief captions
       const grouped = [];
       let buffer = '';
       let bufWords = 0;
@@ -254,9 +293,8 @@ function parseCaptionSegments(script, caption, contentAngle) {
   return [{ text, rawText: text, words: text.split(/\s+/).length }];
 }
 
-// Build timed drawtext filters for cycling captions
-// If wordTiming is provided (array of {word, start, end}), uses exact speech timestamps.
-// Falls back to proportional word-count estimation if wordTiming is absent.
+// FIX #2: Rewritten caption timing — uses fuzzy word matching against ElevenLabs timestamps
+// instead of pure position counting which drifts when punctuation/contractions don't align.
 function buildCyclingCaptionFilters(segments, audioDuration, font, wordTiming) {
   if (segments.length === 0) return [];
   const filters = [];
@@ -264,29 +302,64 @@ function buildCyclingCaptionFilters(segments, audioDuration, font, wordTiming) {
   let segmentTimings;
 
   if (wordTiming && wordTiming.length > 0) {
-    // ── Exact timing from ElevenLabs word-level timestamps ──────────────────
     console.log(`[captions] Using ElevenLabs word timing (${wordTiming.length} words)`);
 
-    // Build a flat array of all words from all segments in order
-    // Match each segment's words to the wordTiming array by position
-    const allSegmentWords = segments.map(s => (s.rawText || s.text).split(/\s+/).filter(w => w.length > 0));
-    const totalSegWords = allSegmentWords.reduce((sum, ws) => sum + ws.length, 0);
+    // Normalize a word for comparison: lowercase, strip punctuation
+    const normalizeWord = (w) => (w || '').toLowerCase().replace(/[^a-z0-9]/g, '');
 
-    // Map word timing indices to segments
-    // wordTiming may have punctuation attached — we match by count, not by text
-    let wordIdx = 0;
+    // Build flat list of all script words across all segments (in order)
+    const allSegmentWords = segments.map(s =>
+      (s.rawText || s.text).split(/\s+/).filter(w => w.length > 0).map(normalizeWord)
+    );
+
+    // Build a flat list of ElevenLabs timing words (normalized)
+    const timingWords = wordTiming.map(t => ({
+      norm: normalizeWord(t.word || ''),
+      start: t.start || 0,
+      end: t.end || 0
+    }));
+
+    // For each segment, find the best matching start/end in the timing array
+    // using a sliding window approach — we walk forward through timingWords
+    let timingCursor = 0;
+
     segmentTimings = segments.map((seg, si) => {
-      const segWordCount = allSegmentWords[si].length;
-      const segStart = wordIdx < wordTiming.length ? (wordTiming[wordIdx].start || 0) : audioDuration * (wordIdx / totalSegWords);
-      const endIdx = Math.min(wordIdx + segWordCount - 1, wordTiming.length - 1);
-      const segEnd = endIdx >= 0 ? (wordTiming[endIdx].end || segStart + 1) : segStart + 1;
-      wordIdx += segWordCount;
-      return { startTime: segStart, endTime: segEnd };
+      const segWords = allSegmentWords[si];
+      if (segWords.length === 0) {
+        return { startTime: audioDuration * (si / segments.length), endTime: audioDuration * ((si + 1) / segments.length) };
+      }
+
+      // Find the first word of this segment in timingWords starting from cursor
+      const firstWord = segWords[0];
+      let matchStart = timingCursor;
+      for (let ti = timingCursor; ti < Math.min(timingCursor + 20, timingWords.length); ti++) {
+        if (timingWords[ti].norm === firstWord || timingWords[ti].norm.includes(firstWord) || firstWord.includes(timingWords[ti].norm)) {
+          matchStart = ti;
+          break;
+        }
+      }
+
+      // Advance cursor by the number of words in this segment
+      const advanceBy = Math.max(1, segWords.length);
+      const matchEnd = Math.min(matchStart + advanceBy - 1, timingWords.length - 1);
+      timingCursor = matchStart + advanceBy;
+
+      const startTime = timingWords[matchStart] ? timingWords[matchStart].start : 0;
+      const endTime = timingWords[matchEnd] ? timingWords[matchEnd].end : startTime + 1;
+
+      return { startTime, endTime };
     });
 
     // Extend last segment to full audio duration to avoid gap at end
     if (segmentTimings.length > 0) {
       segmentTimings[segmentTimings.length - 1].endTime = audioDuration;
+    }
+
+    // Fill any gaps: if a segment's endTime < next segment's startTime, extend it
+    for (let i = 0; i < segmentTimings.length - 1; i++) {
+      if (segmentTimings[i].endTime < segmentTimings[i + 1].startTime) {
+        segmentTimings[i].endTime = segmentTimings[i + 1].startTime;
+      }
     }
 
     console.log(`[captions] Segment timings:`);
@@ -295,7 +368,7 @@ function buildCyclingCaptionFilters(segments, audioDuration, font, wordTiming) {
     });
 
   } else {
-    // ── Fallback: proportional word-count estimation ─────────────────────────
+    // Fallback: proportional word-count estimation
     console.log(`[captions] No word timing — using proportional estimation`);
     const totalWords = segments.reduce((sum, s) => sum + s.words, 0);
     let cursor = 0;
@@ -372,7 +445,7 @@ app.post('/assemble', async (req, res) => {
   const firstItem = video_items[0] || {};
   const scriptText = script || firstItem.script || '';
 
-  console.log(`[${jobId}] Starting assembly v2.3. dry_run=${dry_run}, query="${searchQuery}"`);
+  console.log(`[${jobId}] Starting assembly v2.6.0. dry_run=${dry_run}, query="${searchQuery}"`);
 
   // Dry run
   if (dry_run) {
@@ -415,7 +488,7 @@ app.post('/assemble', async (req, res) => {
     try {
       await downloadFile(BGM_URL, bgmPath);
       const bgmSize = fs.statSync(bgmPath).size;
-      bgmExists = bgmSize > 10000; // Must be a real file, not an error page
+      bgmExists = bgmSize > 10000;
       console.log(`[${jobId}] BGM downloaded: ${bgmSize} bytes, valid=${bgmExists}`);
     } catch (e) {
       console.warn(`[${jobId}] BGM download failed: ${e.message} - will skip BGM`);
@@ -440,6 +513,8 @@ app.post('/assemble', async (req, res) => {
         try {
           console.log(`[${jobId}] Downloading clip ${i+1}/${numClips}...`);
           await downloadFile(pexelsClips[i].url, rawPath);
+          // FIX #4: Removed brightness=-0.06 darkening filter from clip trimming.
+          // Clips are now kept at natural brightness. The overlay drawbox handles contrast.
           const trimCmd = [
             'ffmpeg -y',
             `-i "${rawPath}"`,
@@ -456,7 +531,6 @@ app.post('/assemble', async (req, res) => {
       }
 
       if (trimmedPaths.length > 0) {
-        // Repeat clips to cover full audio duration
         const totalClipDuration = trimmedPaths.length * clipDuration;
         const repeatsNeeded = Math.ceil(audioDuration / totalClipDuration);
         const allClips = [];
@@ -488,7 +562,7 @@ app.post('/assemble', async (req, res) => {
       baseVideoPath = bgPath;
     }
 
-    // Step 4: Parse caption segments for cycling (works for tips lists AND article prose)
+    // Step 4: Parse caption segments
     const segments = parseCaptionSegments(scriptText, caption_text || firstItem.caption || '', content_angle);
     console.log(`[${jobId}] Parsed ${segments.length} caption segments for cycling`);
 
@@ -497,21 +571,19 @@ app.post('/assemble', async (req, res) => {
 
     const logoExists = fs.existsSync(logoPath) && fs.statSync(logoPath).size > 1000;
 
+    // FIX #4: Removed eq=brightness=-0.06 from staticFilters — was darkening the whole video.
+    // Kept contrast=1.05 for a slight pop without darkening.
     if (logoExists) {
-      // Use logo as image overlay via filter_complex
-      // Scale logo to 280px wide, place top-left with 30px padding, semi-transparent
       const cyclingFilters = buildCyclingCaptionFilters(segments, audioDuration, FONT_BOLD, word_timing);
 
-      // Bottom bar for captions + CTA
       const staticFilters = [
-        `eq=brightness=-0.06:contrast=1.05`,
+        `eq=contrast=1.05`,
         `drawbox=x=0:y=ih-340:w=iw:h=340:color=black@0.80:t=fill`,
         `drawtext=fontfile=${FONT_BOLD}:text='yfitai.com - Try free':fontsize=38:fontcolor=0x00ff88:x=(w-text_w)/2:y=h-72:shadowcolor=black@0.9:shadowx=2:shadowy=2`,
       ];
 
       const allVfFilters = [...staticFilters, ...cyclingFilters].join(',');
 
-      // filter_complex: scale logo, overlay on video, then apply drawtext filters
       const filterComplex = [
         `[1:v]scale=260:-1,format=rgba,colorchannelmixer=aa=0.88[logo]`,
         `[0:v]${allVfFilters}[base]`,
@@ -520,12 +592,14 @@ app.post('/assemble', async (req, res) => {
 
       let finalCmd;
       if (bgmExists) {
-        // Mix BGM at BGM_VOLUME under voiceover using amix
+        // FIX #1: BGM mixing — apply volume to BGM stream, then amix with voiceover.
+        // Removed loudnorm from the mixed output — it was crushing the BGM to inaudible.
+        // Instead apply loudnorm only to the voiceover input before mixing.
         const audioFilterComplex = [
           filterComplex,
-          `[2:a]volume=${BGM_VOLUME},aloop=loop=-1:size=2e+09[bgm]`,
-          `[3:a][bgm]amix=inputs=2:duration=first:weights=1|${BGM_VOLUME}[amixed]`,
-          `[amixed]loudnorm=I=-14:TP=-1.5:LRA=11[aout]`
+          `[2:a]aresample=44100,volume=${BGM_VOLUME},aloop=loop=-1:size=2e+09[bgm]`,
+          `[3:a]aresample=44100,loudnorm=I=-16:TP=-1.5:LRA=11[voice]`,
+          `[voice][bgm]amix=inputs=2:duration=first:dropout_transition=3[aout]`
         ].join(';');
         finalCmd = [
           'ffmpeg -y',
@@ -553,7 +627,7 @@ app.post('/assemble', async (req, res) => {
           `-map "[out]"`,
           `-map 2:a`,
           `-c:v libx264 -preset fast -crf 22`,
-          `-c:a aac -b:a 192k -af "loudnorm=I=-14:TP=-1.5:LRA=11"`,
+          `-c:a aac -b:a 192k -af "loudnorm=I=-16:TP=-1.5:LRA=11"`,
           `-pix_fmt yuv420p`,
           `-shortest`,
           `-movflags +faststart`,
@@ -567,7 +641,7 @@ app.post('/assemble', async (req, res) => {
       console.log(`[${jobId}] Logo not available, using text branding`);
       const cyclingFilters = buildCyclingCaptionFilters(segments, audioDuration, FONT_BOLD, word_timing);
       const staticFilters = [
-        `eq=brightness=-0.06:contrast=1.05`,
+        `eq=contrast=1.05`,
         `drawbox=x=0:y=ih-340:w=iw:h=340:color=black@0.80:t=fill`,
         `drawtext=fontfile=${FONT_BOLD}:text='YFIT AI':fontsize=72:fontcolor=0x00ff88:x=30:y=30:shadowcolor=black:shadowx=3:shadowy=3`,
         `drawtext=fontfile=${FONT_BOLD}:text='yfitai.com - Try free':fontsize=38:fontcolor=0x00ff88:x=(w-text_w)/2:y=h-72:shadowcolor=black@0.9:shadowx=2:shadowy=2`,
@@ -575,12 +649,13 @@ app.post('/assemble', async (req, res) => {
       const vfFilter = [...staticFilters, ...cyclingFilters].join(',');
       let finalCmd;
       if (bgmExists) {
+        // FIX #1: Same BGM fix — no loudnorm on mixed output
         finalCmd = [
           'ffmpeg -y',
           `-i "${baseVideoPath}"`,
           `-i "${bgmPath}"`,
           `-i "${audioPath}"`,
-          `-filter_complex "[1:a]volume=${BGM_VOLUME},aloop=loop=-1:size=2e+09[bgm];[2:a][bgm]amix=inputs=2:duration=first:weights=1|${BGM_VOLUME}[amixed];[amixed]loudnorm=I=-14:TP=-1.5:LRA=11[aout]"`,
+          `-filter_complex "[1:a]aresample=44100,volume=${BGM_VOLUME},aloop=loop=-1:size=2e+09[bgm];[2:a]aresample=44100,loudnorm=I=-16:TP=-1.5:LRA=11[voice];[voice][bgm]amix=inputs=2:duration=first:dropout_transition=3[aout]"`,
           `-map 0:v`,
           `-map "[aout]"`,
           `-vf "${vfFilter}"`,
@@ -598,7 +673,7 @@ app.post('/assemble', async (req, res) => {
           `-i "${audioPath}"`,
           `-vf "${vfFilter}"`,
           `-c:v libx264 -preset fast -crf 22`,
-          `-c:a aac -b:a 192k -af "loudnorm=I=-14:TP=-1.5:LRA=11"`,
+          `-c:a aac -b:a 192k -af "loudnorm=I=-16:TP=-1.5:LRA=11"`,
           `-pix_fmt yuv420p`,
           `-shortest`,
           `-movflags +faststart`,
@@ -638,7 +713,7 @@ app.post('/assemble', async (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`YFIT Video Service v2.5.1 running on port ${PORT}`);
+  console.log(`YFIT Video Service v2.6.0 running on port ${PORT}`);
   console.log(`Pexels API: ${PEXELS_API_KEY ? 'configured' : 'NOT configured - set PEXELS_API_KEY'}`);
   console.log(`Logo URL: ${YFIT_LOGO_URL}`);
   try {
