@@ -105,7 +105,7 @@ app.get('/health', (req, res) => {
     status: 'ok',
     ffmpeg: ffmpegVersion,
     pexels: PEXELS_API_KEY ? 'configured' : 'missing',
-    version: '3.0.4',
+    version: '3.0.5',
     timestamp: new Date().toISOString()
   });
 });
@@ -471,6 +471,9 @@ function buildCyclingCaptionFilters(segments, audioDuration, font, wordTiming) {
   for (let i = 0; i < segments.length; i++) {
     const { startTime, endTime } = segmentTimings[i];
     const isHook = (i === 0);  // FIX 3: First segment = hook card
+    // CTA end card: last segment that contains CTA keywords gets YFIT green styling
+    const ctaKeywords = /\b(try|free|link in bio|download|sign up|get started|join|click|tap)\b/i;
+    const isCta = (i === segments.length - 1) && ctaKeywords.test(segments[i].rawText || segments[i].text);
 
     // Wrap text tighter for center-screen (24 chars per line looks better centered)
     const lines = wrapText(segments[i].text, 24);
@@ -532,6 +535,47 @@ function buildCyclingCaptionFilters(segments, audioDuration, font, wordTiming) {
           `drawtext=fontfile=${font}:text='${line3}':fontsize=52:fontcolor=white@0.95:` +
           `x=(w-text_w)/2:y=${y3}:` +
           `shadowcolor=${YFIT_GREEN}@0.6:shadowx=0:shadowy=2:` +
+          `${enableExpr}`
+        );
+      }
+    } else if (isCta) {
+      // ── CTA END CARD: YFIT green text, bright pill, closing call-to-action ──
+      const ctaBoxW = 700;
+      if (line1) {
+        filters.push(
+          `drawbox=x=(w-${ctaBoxW})/2:y=${blockTop}-12:w=${ctaBoxW}:h=${lineHeight}+8:color=black@0.80:t=fill:` +
+          `${enableExpr}`
+        );
+        filters.push(
+          `drawtext=fontfile=${font}:text='${line1}':fontsize=50:fontcolor=${YFIT_GREEN}:` +
+          `x=(w-text_w)/2:y=${blockTop}:` +
+          `shadowcolor=black@0.9:shadowx=2:shadowy=2:` +
+          `${enableExpr}`
+        );
+      }
+      if (line2) {
+        const y2 = `${blockTop}+${lineHeight}`;
+        filters.push(
+          `drawbox=x=(w-${ctaBoxW})/2:y=${y2}-12:w=${ctaBoxW}:h=${lineHeight}+8:color=black@0.80:t=fill:` +
+          `${enableExpr}`
+        );
+        filters.push(
+          `drawtext=fontfile=${font}:text='${line2}':fontsize=48:fontcolor=${YFIT_GREEN}@0.95:` +
+          `x=(w-text_w)/2:y=${y2}:` +
+          `shadowcolor=black@0.9:shadowx=2:shadowy=2:` +
+          `${enableExpr}`
+        );
+      }
+      if (line3) {
+        const y3 = `${blockTop}+${lineHeight * 2}`;
+        filters.push(
+          `drawbox=x=(w-${ctaBoxW})/2:y=${y3}-12:w=${ctaBoxW}:h=${lineHeight}+8:color=black@0.80:t=fill:` +
+          `${enableExpr}`
+        );
+        filters.push(
+          `drawtext=fontfile=${font}:text='${line3}':fontsize=46:fontcolor=${YFIT_GREEN}@0.90:` +
+          `x=(w-text_w)/2:y=${y3}:` +
+          `shadowcolor=black@0.9:shadowx=2:shadowy=2:` +
           `${enableExpr}`
         );
       }
