@@ -105,7 +105,7 @@ app.get('/health', (req, res) => {
     status: 'ok',
     ffmpeg: ffmpegVersion,
     pexels: PEXELS_API_KEY ? 'configured' : 'missing',
-    version: '3.1.0',
+    version: '3.1.1',
     timestamp: new Date().toISOString()
   });
 });
@@ -824,107 +824,52 @@ app.post('/assemble', async (req, res) => {
       `drawtext=fontfile=${FONT_BOLD}:text='yfitai.com':fontsize=64:fontcolor=${YFIT_GREEN}:x=(w-text_w)/2:y=(h/2)-2:shadowcolor=black@0.9:shadowx=2:shadowy=2:${endCardEnable}`,
     ];
 
-    if (logoExists) {
-      const allVfFilters = [...staticFilters, ...cyclingFilters].join(',');
+    // v3.1.1: PNG logo overlay removed — it caused a dark banner on all clips due to
+    // semi-transparent pixels in the PNG darkening the overlay bounding box.
+    // Using text-only YFIT AI watermark (YFIT green, bold, black shadow) which is clean
+    // on any background. PNG logo can be re-added later with a pre-composited opaque circle.
+    console.log(`[${jobId}] Composing final video (text watermark)...`);
+    const textBrandFilters = [
+      ...staticFilters,
+      // YFIT AI brand watermark — top-left, YFIT green, always visible on any background
+      `drawtext=fontfile=${FONT_BOLD}:text='YFIT AI':fontsize=48:fontcolor=${YFIT_GREEN}:` +
+      `x=24:y=24:shadowcolor=black@0.95:shadowx=2:shadowy=2`,
+    ];
+    const vfFilter = [...textBrandFilters, ...cyclingFilters].join(',');
 
-      const filterComplex = [
-        // Circular watermark: scale and add white glow so it pops on both dark and light backgrounds
-        // The glow is applied via a slight white shadow in the overlay blend
-        `[1:v]scale=100:-1,format=rgba[logo]`,
-        `[0:v]${allVfFilters}[base]`,
-        // Logo: top-left corner with slight padding from edge
-        `[base][logo]overlay=x=24:y=24[out]`
-      ].join(';');
-
-      let finalCmd;
-      if (bgmExists) {
-        const audioFilterComplex = [
-          filterComplex,
-          `[2:a]aresample=44100,volume=${BGM_VOLUME},aloop=loop=-1:size=2e+09[bgm]`,
-          `[3:a]aresample=44100,loudnorm=I=-16:TP=-1.5:LRA=11[voice]`,
-          `[voice][bgm]amix=inputs=2:duration=first:dropout_transition=3[aout]`
-        ].join(';');
-        finalCmd = [
-          'ffmpeg -y',
-          `-i "${baseVideoPath}"`,
-          `-i "${logoPath}"`,
-          `-i "${bgmPath}"`,
-          `-i "${audioPath}"`,
-          `-filter_complex "${audioFilterComplex}"`,
-          `-map "[out]"`,
-          `-map "[aout]"`,
-          `-c:v libx264 -preset fast -crf 22`,
-          `-c:a aac -b:a 192k`,
-          `-pix_fmt yuv420p`,
-          `-shortest`,
-          `-movflags +faststart`,
-          `"${finalPath}"`
-        ].join(' ');
-      } else {
-        finalCmd = [
-          'ffmpeg -y',
-          `-i "${baseVideoPath}"`,
-          `-i "${logoPath}"`,
-          `-i "${audioPath}"`,
-          `-filter_complex "${filterComplex}"`,
-          `-map "[out]"`,
-          `-map 2:a`,
-          `-c:v libx264 -preset fast -crf 22`,
-          `-c:a aac -b:a 192k -af "loudnorm=I=-16:TP=-1.5:LRA=11"`,
-          `-pix_fmt yuv420p`,
-          `-shortest`,
-          `-movflags +faststart`,
-          `"${finalPath}"`
-        ].join(' ');
-      }
-
-      execSync(finalCmd, { timeout: 600000, shell: true });
-
+    let finalCmd;
+    if (bgmExists) {
+      finalCmd = [
+        'ffmpeg -y',
+        `-i "${baseVideoPath}"`,
+        `-i "${bgmPath}"`,
+        `-i "${audioPath}"`,
+        `-filter_complex "[1:a]aresample=44100,volume=${BGM_VOLUME},aloop=loop=-1:size=2e+09[bgm];[2:a]aresample=44100,loudnorm=I=-16:TP=-1.5:LRA=11[voice];[voice][bgm]amix=inputs=2:duration=first:dropout_transition=3[aout]"`,
+        `-map 0:v`,
+        `-map "[aout]"`,
+        `-vf "${vfFilter}"`,
+        `-c:v libx264 -preset fast -crf 22`,
+        `-c:a aac -b:a 192k`,
+        `-pix_fmt yuv420p`,
+        `-shortest`,
+        `-movflags +faststart`,
+        `"${finalPath}"`
+      ].join(' ');
     } else {
-      // No logo — text branding only
-      console.log(`[${jobId}] Logo not available, using text branding`);
-      const textBrandFilters = [
-        ...staticFilters,
-        // YFIT brand name top-left when no logo
-        `drawtext=fontfile=${FONT_BOLD}:text='YFIT AI':fontsize=52:fontcolor=${YFIT_GREEN}:` +
-        `x=24:y=24:shadowcolor=black:shadowx=2:shadowy=2`,
-      ];
-      const vfFilter = [...textBrandFilters, ...cyclingFilters].join(',');
-
-      let finalCmd;
-      if (bgmExists) {
-        finalCmd = [
-          'ffmpeg -y',
-          `-i "${baseVideoPath}"`,
-          `-i "${bgmPath}"`,
-          `-i "${audioPath}"`,
-          `-filter_complex "[1:a]aresample=44100,volume=${BGM_VOLUME},aloop=loop=-1:size=2e+09[bgm];[2:a]aresample=44100,loudnorm=I=-16:TP=-1.5:LRA=11[voice];[voice][bgm]amix=inputs=2:duration=first:dropout_transition=3[aout]"`,
-          `-map 0:v`,
-          `-map "[aout]"`,
-          `-vf "${vfFilter}"`,
-          `-c:v libx264 -preset fast -crf 22`,
-          `-c:a aac -b:a 192k`,
-          `-pix_fmt yuv420p`,
-          `-shortest`,
-          `-movflags +faststart`,
-          `"${finalPath}"`
-        ].join(' ');
-      } else {
-        finalCmd = [
-          'ffmpeg -y',
-          `-i "${baseVideoPath}"`,
-          `-i "${audioPath}"`,
-          `-vf "${vfFilter}"`,
-          `-c:v libx264 -preset fast -crf 22`,
-          `-c:a aac -b:a 192k -af "loudnorm=I=-16:TP=-1.5:LRA=11"`,
-          `-pix_fmt yuv420p`,
-          `-shortest`,
-          `-movflags +faststart`,
-          `"${finalPath}"`
-        ].join(' ');
-      }
-      execSync(finalCmd, { timeout: 600000, shell: true });
+      finalCmd = [
+        'ffmpeg -y',
+        `-i "${baseVideoPath}"`,
+        `-i "${audioPath}"`,
+        `-vf "${vfFilter}"`,
+        `-c:v libx264 -preset fast -crf 22`,
+        `-c:a aac -b:a 192k -af "loudnorm=I=-16:TP=-1.5:LRA=11"`,
+        `-pix_fmt yuv420p`,
+        `-shortest`,
+        `-movflags +faststart`,
+        `"${finalPath}"`
+      ].join(' ');
     }
+    execSync(finalCmd, { timeout: 600000, shell: true });
 
     const videoSize = fs.statSync(finalPath).size;
     console.log(`[${jobId}] Final video: ${videoSize} bytes`);
