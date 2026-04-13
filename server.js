@@ -105,7 +105,7 @@ app.get('/health', (req, res) => {
     status: 'ok',
     ffmpeg: ffmpegVersion,
     pexels: PEXELS_API_KEY ? 'configured' : 'missing',
-    version: '3.0.3',
+    version: '3.0.4',
     timestamp: new Date().toISOString()
   });
 });
@@ -761,9 +761,9 @@ app.post('/assemble', async (req, res) => {
       const allVfFilters = [...staticFilters, ...cyclingFilters].join(',');
 
       const filterComplex = [
-        // Crop logo to just the Y icon (left 38% of the 1144x388 logo = ~435px wide)
-      // This gives a compact circular-feeling watermark instead of the full wordmark banner
-      `[1:v]crop=435:388:0:0,scale=120:-1,format=rgba,colorchannelmixer=aa=0.85[logo]`,
+        // Crop logo to just the Y+wings icon (left 65% of the 1144x388 logo = 743px wide)
+      // This removes the 'FIT' text and gives a compact icon watermark in the top-left corner
+      `[1:v]crop=743:388:0:0,scale=120:-1,format=rgba,colorchannelmixer=aa=0.85[logo]`,
         `[0:v]${allVfFilters}[base]`,
         // Logo: top-left corner, small and clean
         `[base][logo]overlay=x=20:y=20[out]`
