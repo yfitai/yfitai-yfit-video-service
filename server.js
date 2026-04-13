@@ -104,7 +104,7 @@ app.get('/health', (req, res) => {
     status: 'ok',
     ffmpeg: ffmpegVersion,
     pexels: PEXELS_API_KEY ? 'configured' : 'missing',
-    version: '3.0.0',
+    version: '3.0.1',
     timestamp: new Date().toISOString()
   });
 });
