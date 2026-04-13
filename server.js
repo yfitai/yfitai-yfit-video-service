@@ -107,7 +107,7 @@ app.get('/health', (req, res) => {
     status: 'ok',
     ffmpeg: ffmpegVersion,
     pexels: PEXELS_API_KEY ? 'configured' : 'missing',
-    version: '3.1.7',
+    version: '3.1.8',
     timestamp: new Date().toISOString()
   });
 });
@@ -847,10 +847,10 @@ app.post('/assemble', async (req, res) => {
       // Logo overlay via filter_complex: scale to 240px wide, use rgba to preserve transparency
       // overlay=x=w-overlay_w-20:y=10 places it top-RIGHT with no background box
       if (bgmExists) {
-        const fc = `[0:v]${vfOnlyFilters}[vbase];[1:v]scale=240:-1,format=rgba[logo];[vbase][logo]overlay=x=W-w-20:y=10[vout];[2:a]aresample=44100,volume=${BGM_VOLUME},aloop=loop=-1:size=2e+09[bgm];[3:a]aresample=44100,loudnorm=I=-16:TP=-1.5:LRA=11[voice];[voice][bgm]amix=inputs=2:duration=first:dropout_transition=3[aout]`;
+        const fc = `[0:v]${vfOnlyFilters}[vbase];[1:v]scale=240:-1,format=rgba,premultiply[logo];[vbase][logo]overlay=x=W-w-20:y=10:format=auto[vout];[2:a]aresample=44100,volume=${BGM_VOLUME},aloop=loop=-1:size=2e+09[bgm];[3:a]aresample=44100,loudnorm=I=-16:TP=-1.5:LRA=11[voice];[voice][bgm]amix=inputs=2:duration=first:dropout_transition=3[aout]`;
         finalCmd = `ffmpeg -y -i "${baseVideoPath}" -i "${logoPath}" -i "${bgmPath}" -i "${audioPath}" -filter_complex "${fc}" -map "[vout]" -map "[aout]" -c:v libx264 -preset fast -crf 22 -c:a aac -b:a 192k -pix_fmt yuv420p -shortest -movflags +faststart "${finalPath}"`;
       } else {
-        const fc = `[0:v]${vfOnlyFilters}[vbase];[1:v]scale=240:-1,format=rgba[logo];[vbase][logo]overlay=x=W-w-20:y=10[vout];[2:a]aresample=44100,loudnorm=I=-16:TP=-1.5:LRA=11[aout]`;
+        const fc = `[0:v]${vfOnlyFilters}[vbase];[1:v]scale=240:-1,format=rgba,premultiply[logo];[vbase][logo]overlay=x=W-w-20:y=10:format=auto[vout];[2:a]aresample=44100,loudnorm=I=-16:TP=-1.5:LRA=11[aout]`;
         finalCmd = `ffmpeg -y -i "${baseVideoPath}" -i "${logoPath}" -i "${audioPath}" -filter_complex "${fc}" -map "[vout]" -map "[aout]" -c:v libx264 -preset fast -crf 22 -c:a aac -b:a 192k -pix_fmt yuv420p -shortest -movflags +faststart "${finalPath}"`;
       }
     } else {
