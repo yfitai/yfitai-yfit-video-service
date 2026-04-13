@@ -105,7 +105,7 @@ app.get('/health', (req, res) => {
     status: 'ok',
     ffmpeg: ffmpegVersion,
     pexels: PEXELS_API_KEY ? 'configured' : 'missing',
-    version: '3.0.6',
+    version: '3.0.7',
     timestamp: new Date().toISOString()
   });
 });
@@ -467,7 +467,17 @@ function buildCyclingCaptionFilters(segments, audioDuration, font, wordTiming) {
     });
   }
 
-  // Build drawtext filters from computed timings
+    // Clip last segment end time so captions don't overlap the end card
+    // The end card fires at audioDuration-3s, so the last caption must end there
+    const endCardStartTime = Math.max(0, audioDuration - 3.0);
+    if (segmentTimings.length > 0) {
+      const lastTiming = segmentTimings[segmentTimings.length - 1];
+      if (lastTiming.endTime > endCardStartTime) {
+        lastTiming.endTime = endCardStartTime;
+      }
+    }
+
+    // Build drawtext filters from computed timings
   for (let i = 0; i < segments.length; i++) {
     const { startTime, endTime } = segmentTimings[i];
     const isHook = (i === 0);  // FIX 3: First segment = hook card
@@ -804,15 +814,13 @@ app.post('/assemble', async (req, res) => {
       // Brand URL — YFIT green for brand recognition, top-right corner (always visible)
       `drawtext=fontfile=${FONT_BOLD}:text='yfitai.com':fontsize=30:fontcolor=${YFIT_GREEN}@0.90:` +
       `x=w-text_w-24:y=24:shadowcolor=black@0.9:shadowx=1:shadowy=1`,
-      // End card: large yfitai.com centered on screen for last 3 seconds
-      // Dark pill background + large YFIT green URL — unmissable CTA
-      `drawbox=x=(w-640)/2:y=(h/2)+80:w=640:h=76:color=black@0.80:t=fill:${endCardEnable}`,
-      `drawtext=fontfile=${FONT_BOLD}:text='yfitai.com':fontsize=64:fontcolor=${YFIT_GREEN}:` +
-      `x=(w-text_w)/2:y=(h/2)+88:shadowcolor=black@0.9:shadowx=2:shadowy=2:${endCardEnable}`,
-      // Sub-label above the URL
-      `drawbox=x=(w-480)/2:y=(h/2)+28:w=480:h=52:color=black@0.70:t=fill:${endCardEnable}`,
-      `drawtext=fontfile=${FONT_BOLD}:text='Try YFIT AI Free':fontsize=38:fontcolor=white@0.95:` +
-      `x=(w-text_w)/2:y=(h/2)+36:shadowcolor=black@0.9:shadowx=1:shadowy=1:${endCardEnable}`,
+      // End card: "Try YFIT AI Free" above, large yfitai.com below — centered block
+      // Total block height: 52px label + 12px gap + 76px URL = 140px
+      // Center block at h/2 - 70 so the whole block is vertically centered
+      `drawbox=x=(w-500)/2:y=(h/2)-78:w=500:h=56:color=black@0.75:t=fill:${endCardEnable}`,
+      `drawtext=fontfile=${FONT_BOLD}:text='Try YFIT AI Free':fontsize=40:fontcolor=white@0.95:x=(w-text_w)/2:y=(h/2)-70:shadowcolor=black@0.9:shadowx=1:shadowy=1:${endCardEnable}`,
+      `drawbox=x=(w-640)/2:y=(h/2)-10:w=640:h=80:color=black@0.80:t=fill:${endCardEnable}`,
+      `drawtext=fontfile=${FONT_BOLD}:text='yfitai.com':fontsize=64:fontcolor=${YFIT_GREEN}:x=(w-text_w)/2:y=(h/2)-2:shadowcolor=black@0.9:shadowx=2:shadowy=2:${endCardEnable}`,
     ];
 
     if (logoExists) {
