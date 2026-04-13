@@ -488,13 +488,17 @@ function buildCyclingCaptionFilters(segments, audioDuration, font, wordTiming) {
     // Center block: start at (h - totalTextHeight) / 2
     const blockTop = `(h-${totalTextHeight})/2`;
 
+    // NOTE: drawbox does NOT support text_w — it's only available in drawtext.
+    // We use fixed-width pill boxes wide enough for 24-char lines at the given font sizes.
+    // At 56px bold DejaVu, 24 chars ≈ 700px wide. At 46px, 24 chars ≈ 580px wide.
+    // Boxes are centered using x=(w-BOX_W)/2 with a fixed BOX_W.
     if (isHook) {
       // ── HOOK CARD: Large, YFIT green shadow, bold white text ──────────────
-      // Visually punchy in the first 1.5 seconds — stops the scroll
+      // Fixed pill box width for 56px font: 24 chars × ~29px/char ≈ 700px + 40px padding
+      const hookBoxW = 740;
       if (line1) {
-        // Dark pill background behind hook text
         filters.push(
-          `drawbox=x=(w-text_w)/2-20:y=${blockTop}-12:w=text_w+40:h=${lineHeight}+8:color=black@0.65:t=fill:` +
+          `drawbox=x=(w-${hookBoxW})/2:y=${blockTop}-12:w=${hookBoxW}:h=${lineHeight}+8:color=black@0.65:t=fill:` +
           `${enableExpr}`
         );
         filters.push(
@@ -507,7 +511,7 @@ function buildCyclingCaptionFilters(segments, audioDuration, font, wordTiming) {
       if (line2) {
         const y2 = `${blockTop}+${lineHeight}`;
         filters.push(
-          `drawbox=x=(w-text_w)/2-20:y=${y2}-12:w=text_w+40:h=${lineHeight}+8:color=black@0.65:t=fill:` +
+          `drawbox=x=(w-${hookBoxW})/2:y=${y2}-12:w=${hookBoxW}:h=${lineHeight}+8:color=black@0.65:t=fill:` +
           `${enableExpr}`
         );
         filters.push(
@@ -520,7 +524,7 @@ function buildCyclingCaptionFilters(segments, audioDuration, font, wordTiming) {
       if (line3) {
         const y3 = `${blockTop}+${lineHeight * 2}`;
         filters.push(
-          `drawbox=x=(w-text_w)/2-20:y=${y3}-12:w=text_w+40:h=${lineHeight}+8:color=black@0.65:t=fill:` +
+          `drawbox=x=(w-${hookBoxW})/2:y=${y3}-12:w=${hookBoxW}:h=${lineHeight}+8:color=black@0.65:t=fill:` +
           `${enableExpr}`
         );
         filters.push(
@@ -532,9 +536,11 @@ function buildCyclingCaptionFilters(segments, audioDuration, font, wordTiming) {
       }
     } else {
       // ── BODY SEGMENTS: Clean white text, dark shadow, pill background ─────
+      // Fixed pill box width for 46px font: 24 chars × ~24px/char ≈ 580px + 32px padding
+      const bodyBoxW = 620;
       if (line1) {
         filters.push(
-          `drawbox=x=(w-text_w)/2-16:y=${blockTop}-10:w=text_w+32:h=${lineHeight}+6:color=black@0.60:t=fill:` +
+          `drawbox=x=(w-${bodyBoxW})/2:y=${blockTop}-10:w=${bodyBoxW}:h=${lineHeight}+6:color=black@0.60:t=fill:` +
           `${enableExpr}`
         );
         filters.push(
@@ -547,7 +553,7 @@ function buildCyclingCaptionFilters(segments, audioDuration, font, wordTiming) {
       if (line2) {
         const y2 = `${blockTop}+${lineHeight}`;
         filters.push(
-          `drawbox=x=(w-text_w)/2-16:y=${y2}-10:w=text_w+32:h=${lineHeight}+6:color=black@0.60:t=fill:` +
+          `drawbox=x=(w-${bodyBoxW})/2:y=${y2}-10:w=${bodyBoxW}:h=${lineHeight}+6:color=black@0.60:t=fill:` +
           `${enableExpr}`
         );
         filters.push(
@@ -560,7 +566,7 @@ function buildCyclingCaptionFilters(segments, audioDuration, font, wordTiming) {
       if (line3) {
         const y3 = `${blockTop}+${lineHeight * 2}`;
         filters.push(
-          `drawbox=x=(w-text_w)/2-16:y=${y3}-10:w=text_w+32:h=${lineHeight}+6:color=black@0.60:t=fill:` +
+          `drawbox=x=(w-${bodyBoxW})/2:y=${y3}-10:w=${bodyBoxW}:h=${lineHeight}+6:color=black@0.60:t=fill:` +
           `${enableExpr}`
         );
         filters.push(
