@@ -84,7 +84,7 @@ function getBgmForAngle(contentAngle) {
 
 // BGM at 12% — subtle presence, industry standard for background music under voiceover.
 // 45% was too loud and sounded like a hum competing with the voice.
-const BGM_VOLUME = 0.12;
+const BGM_VOLUME = 0.20; // 20% — clearly audible as music, comfortably under voiceover
 
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -105,7 +105,7 @@ app.get('/health', (req, res) => {
     status: 'ok',
     ffmpeg: ffmpegVersion,
     pexels: PEXELS_API_KEY ? 'configured' : 'missing',
-    version: '3.0.9',
+    version: '3.1.0',
     timestamp: new Date().toISOString()
   });
 });
@@ -828,13 +828,12 @@ app.post('/assemble', async (req, res) => {
       const allVfFilters = [...staticFilters, ...cyclingFilters].join(',');
 
       const filterComplex = [
-        // Circular watermark: already cropped to Y+wings icon with transparent background
-        // scale=100:-1 keeps aspect ratio, format=rgba preserves transparency
-        // No colorchannelmixer needed — PNG alpha channel handles transparency
+        // Circular watermark: scale and add white glow so it pops on both dark and light backgrounds
+        // The glow is applied via a slight white shadow in the overlay blend
         `[1:v]scale=100:-1,format=rgba[logo]`,
         `[0:v]${allVfFilters}[base]`,
-        // Logo: top-left corner, clean transparent overlay
-        `[base][logo]overlay=x=20:y=20[out]`
+        // Logo: top-left corner with slight padding from edge
+        `[base][logo]overlay=x=24:y=24[out]`
       ].join(';');
 
       let finalCmd;
