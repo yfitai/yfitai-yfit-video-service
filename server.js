@@ -1,6 +1,6 @@
 'use strict';
 // ============================================================
-// YFIT Video Service v3.1.5
+// YFIT Video Service v3.1.6
 // ============================================================
 // CHANGES vs v2.8.0:
 //
@@ -52,7 +52,9 @@ const API_SECRET = process.env.API_SECRET || 'yfit-video-secret-2026';
 const PEXELS_API_KEY = process.env.PEXELS_API_KEY;
 
 // YFIT circular watermark — Y+wings icon, fully transparent background, no box/banner
-const YFIT_LOGO_URL = 'https://files.manuscdn.com/user_upload_by_module/session_file/310519663099417101/iwWwgxCMQmlzrmTK.png';
+// v3.1.6: Use tight-cropped logo (149x81px) to eliminate black bounding-box artifact
+// Original 200x200 PNG had 64px transparent rows at top causing a black box in FFmpeg overlay
+const YFIT_LOGO_URL = 'https://d2xsxph8kpxj0f.cloudfront.net/310519663099417101/8TNedJULyoVCPDLa6UYde3/yfit_logo_tight_fe18c039.png';
 
 // ─── FIX 1: BRAND MUSIC — Sonic Identity ─────────────────────────────────────
 // YFIT uses a consistent signature track per content angle rather than random
@@ -105,7 +107,7 @@ app.get('/health', (req, res) => {
     status: 'ok',
     ffmpeg: ffmpegVersion,
     pexels: PEXELS_API_KEY ? 'configured' : 'missing',
-    version: '3.1.5',
+    version: '3.1.6',
     timestamp: new Date().toISOString()
   });
 });
