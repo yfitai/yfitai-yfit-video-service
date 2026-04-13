@@ -806,16 +806,21 @@ app.post('/assemble', async (req, res) => {
 
     console.log(`[${jobId}] Composing final video (logo=${logoExists ? 'PNG' : 'text fallback'})...`);
 
+    // Write filter_complex to a temp script file to avoid shell arg length limits
+    const fcScriptPath = `${tmpDir}/${jobId}_fc.txt`;
+    tempFiles.push(fcScriptPath);
     let finalCmd;
     if (logoExists) {
       // Logo overlay via filter_complex: scale to 240px wide, use rgba to preserve transparency
       // overlay=x=20:y=10 places it top-LEFT with no background box
       if (bgmExists) {
         const fc = `[0:v]${vfOnlyFilters}[vbase];[1:v]scale=240:-1,format=rgba,premultiply[logo];[vbase][logo]overlay=x=20:y=10:format=auto[vout];[2:a]aresample=44100,volume=${BGM_VOLUME},aloop=loop=-1:size=2e+09[bgm];[3:a]aresample=44100,loudnorm=I=-16:TP=-1.5:LRA=11[voice];[voice][bgm]amix=inputs=2:duration=first:dropout_transition=3[aout]`;
-        finalCmd = `ffmpeg -y -i "${baseVideoPath}" -i "${logoPath}" -i "${bgmPath}" -i "${audioPath}" -filter_complex "${fc}" -map "[vout]" -map "[aout]" -c:v libx264 -preset fast -crf 22 -c:a aac -b:a 192k -pix_fmt yuv420p -shortest -movflags +faststart "${finalPath}"`;
+        fs.writeFileSync(fcScriptPath, fc);
+        finalCmd = `ffmpeg -y -i "${baseVideoPath}" -i "${logoPath}" -i "${bgmPath}" -i "${audioPath}" -filter_complex_script "${fcScriptPath}" -map "[vout]" -map "[aout]" -c:v libx264 -preset fast -crf 22 -c:a aac -b:a 192k -pix_fmt yuv420p -shortest -movflags +faststart "${finalPath}"`;
       } else {
         const fc = `[0:v]${vfOnlyFilters}[vbase];[1:v]scale=240:-1,format=rgba,premultiply[logo];[vbase][logo]overlay=x=20:y=10:format=auto[vout];[2:a]aresample=44100,loudnorm=I=-16:TP=-1.5:LRA=11[aout]`;
-        finalCmd = `ffmpeg -y -i "${baseVideoPath}" -i "${logoPath}" -i "${audioPath}" -filter_complex "${fc}" -map "[vout]" -map "[aout]" -c:v libx264 -preset fast -crf 22 -c:a aac -b:a 192k -pix_fmt yuv420p -shortest -movflags +faststart "${finalPath}"`;
+        fs.writeFileSync(fcScriptPath, fc);
+        finalCmd = `ffmpeg -y -i "${baseVideoPath}" -i "${logoPath}" -i "${audioPath}" -filter_complex_script "${fcScriptPath}" -map "[vout]" -map "[aout]" -c:v libx264 -preset fast -crf 22 -c:a aac -b:a 192k -pix_fmt yuv420p -shortest -movflags +faststart "${finalPath}"`;
       }
     } else {
       // Fallback: text-only YFIT AI top-left if logo download failed
