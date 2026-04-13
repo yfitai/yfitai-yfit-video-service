@@ -105,7 +105,7 @@ app.get('/health', (req, res) => {
     status: 'ok',
     ffmpeg: ffmpegVersion,
     pexels: PEXELS_API_KEY ? 'configured' : 'missing',
-    version: '3.0.5',
+    version: '3.0.6',
     timestamp: new Date().toISOString()
   });
 });
@@ -794,11 +794,25 @@ app.post('/assemble', async (req, res) => {
     // Slight contrast boost to make people in motion pop.
     const cyclingFilters = buildCyclingCaptionFilters(segments, audioDuration, FONT_BOLD, word_timing);
 
+    // End card: last 3 seconds of every video — large yfitai.com on screen
+    // This fires regardless of what the script says, ensuring the URL is always visible
+    const endCardStart = Math.max(0, audioDuration - 3.0);
+    const endCardEnable = `enable='between(t,${endCardStart.toFixed(2)},${audioDuration.toFixed(2)})'`;
+
     const staticFilters = [
       `eq=contrast=1.05`,
-      // Brand URL — YFIT green for brand recognition, top-right corner
+      // Brand URL — YFIT green for brand recognition, top-right corner (always visible)
       `drawtext=fontfile=${FONT_BOLD}:text='yfitai.com':fontsize=30:fontcolor=${YFIT_GREEN}@0.90:` +
       `x=w-text_w-24:y=24:shadowcolor=black@0.9:shadowx=1:shadowy=1`,
+      // End card: large yfitai.com centered on screen for last 3 seconds
+      // Dark pill background + large YFIT green URL — unmissable CTA
+      `drawbox=x=(w-640)/2:y=(h/2)+80:w=640:h=76:color=black@0.80:t=fill:${endCardEnable}`,
+      `drawtext=fontfile=${FONT_BOLD}:text='yfitai.com':fontsize=64:fontcolor=${YFIT_GREEN}:` +
+      `x=(w-text_w)/2:y=(h/2)+88:shadowcolor=black@0.9:shadowx=2:shadowy=2:${endCardEnable}`,
+      // Sub-label above the URL
+      `drawbox=x=(w-480)/2:y=(h/2)+28:w=480:h=52:color=black@0.70:t=fill:${endCardEnable}`,
+      `drawtext=fontfile=${FONT_BOLD}:text='Try YFIT AI Free':fontsize=38:fontcolor=white@0.95:` +
+      `x=(w-text_w)/2:y=(h/2)+36:shadowcolor=black@0.9:shadowx=1:shadowy=1:${endCardEnable}`,
     ];
 
     if (logoExists) {
