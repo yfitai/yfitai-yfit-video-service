@@ -1,6 +1,6 @@
 'use strict';
 // ============================================================
-// YFIT Video Service v3.1.4
+// YFIT Video Service v3.1.5
 // ============================================================
 // CHANGES vs v2.8.0:
 //
@@ -105,7 +105,7 @@ app.get('/health', (req, res) => {
     status: 'ok',
     ffmpeg: ffmpegVersion,
     pexels: PEXELS_API_KEY ? 'configured' : 'missing',
-    version: '3.1.4',
+    version: '3.1.5',
     timestamp: new Date().toISOString()
   });
 });
@@ -752,8 +752,8 @@ app.post('/assemble', async (req, res) => {
           } catch (e) {
             console.warn(`[${jobId}] Clip ${i} brightness probe failed: ${e.message}`);
           }
-          if (topBrightness < 40) {
-            console.warn(`[${jobId}] Clip ${i} rejected: top brightness ${topBrightness.toFixed(1)} < 40 (dark ceiling)`);
+          if (topBrightness < 80) {
+            console.warn(`[${jobId}] Clip ${i} rejected: top brightness ${topBrightness.toFixed(1)} < 80 (dark ceiling)`);
             continue;
           }
           console.log(`[${jobId}] Clip ${i} accepted: top brightness ${topBrightness.toFixed(1)}`);
