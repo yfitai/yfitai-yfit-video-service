@@ -105,7 +105,7 @@ app.get('/health', (req, res) => {
     status: 'ok',
     ffmpeg: ffmpegVersion,
     pexels: PEXELS_API_KEY ? 'configured' : 'missing',
-    version: '3.0.7',
+    version: '3.0.8',
     timestamp: new Date().toISOString()
   });
 });
@@ -258,6 +258,7 @@ function sanitizeForDrawtext(text) {
     .replace(/\[/g, '(')
     .replace(/\]/g, ')')
     .replace(/\s+/g, ' ')
+    .replace(/^[.\s]+/, '')   // strip leading periods and whitespace
     .trim();
   if (!cleaned) return cleaned;
   return cleaned.charAt(0).toUpperCase() + cleaned.slice(1);
@@ -829,7 +830,7 @@ app.post('/assemble', async (req, res) => {
       const filterComplex = [
         // Crop logo to just the Y+wings icon (left 65% of the 1144x388 logo = 743px wide)
       // This removes the 'FIT' text and gives a compact icon watermark in the top-left corner
-      `[1:v]crop=743:388:0:0,scale=120:-1,format=rgba,colorchannelmixer=aa=0.85[logo]`,
+      `[1:v]crop=743:388:0:0,scale=120:-1,format=rgba,colorchannelmixer=aa=0.55[logo]`,
         `[0:v]${allVfFilters}[base]`,
         // Logo: top-left corner, small and clean
         `[base][logo]overlay=x=20:y=20[out]`
