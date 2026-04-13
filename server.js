@@ -807,7 +807,7 @@ app.post('/assemble', async (req, res) => {
     console.log(`[${jobId}] Composing final video (logo=${logoExists ? 'PNG' : 'text fallback'})...`);
 
     // Write filter_complex to a temp script file to avoid shell arg length limits
-    const fcScriptPath = `${tmpDir}/${jobId}_fc.txt`;
+    const fcScriptPath = path.join(TEMP_DIR, `${jobId}_fc.txt`);
     tempFiles.push(fcScriptPath);
     let finalCmd;
     if (logoExists) {
