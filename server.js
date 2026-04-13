@@ -105,7 +105,7 @@ app.get('/health', (req, res) => {
     status: 'ok',
     ffmpeg: ffmpegVersion,
     pexels: PEXELS_API_KEY ? 'configured' : 'missing',
-    version: '3.0.2',
+    version: '3.0.3',
     timestamp: new Date().toISOString()
   });
 });
@@ -752,16 +752,18 @@ app.post('/assemble', async (req, res) => {
 
     const staticFilters = [
       `eq=contrast=1.05`,
-      // Brand URL — top-right corner, small, always visible
-      `drawtext=fontfile=${FONT_BOLD}:text='yfitai.com':fontsize=30:fontcolor=white@0.75:` +
-      `x=w-text_w-24:y=24:shadowcolor=black@0.8:shadowx=1:shadowy=1`,
+      // Brand URL — YFIT green for brand recognition, top-right corner
+      `drawtext=fontfile=${FONT_BOLD}:text='yfitai.com':fontsize=30:fontcolor=${YFIT_GREEN}@0.90:` +
+      `x=w-text_w-24:y=24:shadowcolor=black@0.9:shadowx=1:shadowy=1`,
     ];
 
     if (logoExists) {
       const allVfFilters = [...staticFilters, ...cyclingFilters].join(',');
 
       const filterComplex = [
-        `[1:v]scale=260:-1,format=rgba,colorchannelmixer=aa=0.88[logo]`,
+        // Crop logo to just the Y icon (left 38% of the 1144x388 logo = ~435px wide)
+      // This gives a compact circular-feeling watermark instead of the full wordmark banner
+      `[1:v]crop=435:388:0:0,scale=120:-1,format=rgba,colorchannelmixer=aa=0.85[logo]`,
         `[0:v]${allVfFilters}[base]`,
         // Logo: top-left corner, small and clean
         `[base][logo]overlay=x=20:y=20[out]`
