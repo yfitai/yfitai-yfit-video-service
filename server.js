@@ -1,6 +1,6 @@
 'use strict';
 // ============================================================
-// YFIT Video Service v3.0.0
+// YFIT Video Service v3.1.2
 // ============================================================
 // CHANGES vs v2.8.0:
 //
@@ -105,7 +105,7 @@ app.get('/health', (req, res) => {
     status: 'ok',
     ffmpeg: ffmpegVersion,
     pexels: PEXELS_API_KEY ? 'configured' : 'missing',
-    version: '3.1.1',
+    version: '3.1.2',
     timestamp: new Date().toISOString()
   });
 });
@@ -814,7 +814,7 @@ app.post('/assemble', async (req, res) => {
       `eq=contrast=1.05`,
       // Brand URL — YFIT green for brand recognition, top-right corner (always visible)
       `drawtext=fontfile=${FONT_BOLD}:text='yfitai.com':fontsize=30:fontcolor=${YFIT_GREEN}@0.90:` +
-      `x=w-text_w-24:y=24:shadowcolor=black@0.9:shadowx=1:shadowy=1`,
+      `x=w-text_w-24:y=100:shadowcolor=black@0.9:shadowx=1:shadowy=1`,
       // End card: "Try YFIT AI Free" above, large yfitai.com below — centered block
       // Total block height: 52px label + 12px gap + 76px URL = 140px
       // Center block at h/2 - 70 so the whole block is vertically centered
@@ -833,7 +833,7 @@ app.post('/assemble', async (req, res) => {
       ...staticFilters,
       // YFIT AI brand watermark — top-left, YFIT green, always visible on any background
       `drawtext=fontfile=${FONT_BOLD}:text='YFIT AI':fontsize=48:fontcolor=${YFIT_GREEN}:` +
-      `x=24:y=24:shadowcolor=black@0.95:shadowx=2:shadowy=2`,
+      `x=24:y=100:shadowcolor=black@0.95:shadowx=2:shadowy=2`,
     ];
     const vfFilter = [...textBrandFilters, ...cyclingFilters].join(',');
 
