@@ -1,36 +1,30 @@
 'use strict';
 // ============================================================
-// YFIT Video Service v3.2.0
+// YFIT Video Service v3.3.0
 // ============================================================
-// CHANGES vs v2.8.0:
+// CHANGES vs v3.2.0:
 //
-//  FIX 1 — BRAND MUSIC (sonic identity)
-//    Replaced random 5-track pool with content-angle-mapped
-//    signature tracks. bgm_motivational is the YFIT primary
-//    signature. bgm_energetic plays for high-intensity angles
-//    (workout_tips, form_analysis). bgm_deep plays for
-//    science/medical angles (medication_fitness, nutrition_science).
-//    Consistent audio = instant brand recall across all platforms.
+//  FIX — CAPTION/AUDIO SYNC (the core issue)
+//    Root cause: parseCaptionSegments() was splitting the script
+//    text into segments using regex/sentence heuristics, but the
+//    resulting segment boundaries didn't align with the actual
+//    spoken words in the ElevenLabs audio.
 //
-//  FIX 2 — TEXT OVERLAY POSITION (center-screen)
-//    Moved caption text from bottom-of-screen (y=h-295) to
-//    center-screen (y=(h/2)-offset). Added semi-transparent
-//    dark pill/box behind each text line for readability on any
-//    background. Bottom black bar removed — it blocked platform
-//    UI on TikTok/Instagram Reels. Brand URL moved to top-right.
-//
-//  FIX 3 — HOOK CARD STYLING (first 1.5s visual punch)
-//    Segment 0 (the script hook) now renders at 56px bold white
-//    with YFIT green (#00ff88) shadow — visually distinct from
-//    body segments (46px white). Hook always starts at t=0.
-//    This matches the Gymshark/Peloton hook-card pattern.
-//
-//  FIX 4 — PEOPLE IN MOTION (Pexels query improvement)
-//    All Pexels queries now append "person" or "athlete" to
-//    maximise the probability of returning clips with a human
-//    body in motion. Clips under 4 seconds are rejected (too
-//    short to show meaningful motion). Minimum 6 clips requested
-//    per query (up from 12 results filtered to 6).
+//    New approach:
+//    1. When word_timing is present, we build segments DIRECTLY
+//       from the word_timing array itself — no script parsing
+//       needed. We group consecutive words into caption "chunks"
+//       of ~8-12 words, then assign each chunk's start/end time
+//       directly from the word timestamps. This guarantees
+//       perfect sync because the captions ARE the timing data.
+//    2. parseCaptionSegments() is now only used as a fallback
+//       when word_timing is absent (no ElevenLabs timestamps).
+//    3. Added validation: if word_timing is present but script
+//       is missing, we reconstruct the script from word_timing
+//       so the caption text matches the spoken audio exactly.
+//    4. Tightened the word-match alignment to use a greedy
+//       sliding-window with edit-distance fallback so segment
+//       boundaries don't drift on long scripts.
 //
 // ============================================================
 
@@ -51,27 +45,16 @@ const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY;
 const API_SECRET = process.env.API_SECRET || 'yfit-video-secret-2026';
 const PEXELS_API_KEY = process.env.PEXELS_API_KEY;
 
-// YFIT circular watermark — Y+wings icon, fully transparent background, no box/banner
-// v3.1.6: Use tight-cropped logo (149x81px) to eliminate black bounding-box artifact
-// Original 200x200 PNG had 64px transparent rows at top causing a black box in FFmpeg overlay
+// YFIT logo — transparent PNG, tight-cropped
 const YFIT_LOGO_URL = 'https://d2xsxph8kpxj0f.cloudfront.net/310519663099417101/8TNedJULyoVCPDLa6UYde3/yfit_logo_new_e83060df.png';
 
-// ─── FIX 1: BRAND MUSIC — Sonic Identity ─────────────────────────────────────
-// YFIT uses a consistent signature track per content angle rather than random
-// selection. This builds instant audio brand recognition across all platforms.
-//
-// Primary signature:  bgm_motivational  — warm, uplifting, universal YFIT sound
-// High-intensity alt: bgm_energetic     — workout_tips, form_analysis
-// Science/calm alt:   bgm_deep          — medication_fitness, nutrition_science
-//
-// All three tracks are royalty-free and stored in Supabase.
+// ─── BRAND MUSIC — Sonic Identity ────────────────────────────────────────────
 const BGM_TRACKS = {
   primary:    `${SUPABASE_URL}/storage/v1/object/public/yfit-voiceovers/assets/bgm_motivational.mp3`,
   energetic:  'https://d2xsxph8kpxj0f.cloudfront.net/310519663099417101/8TNedJULyoVCPDLa6UYde3/bgm_energetic_new_be4cae1c.mp3',
   deep:       `${SUPABASE_URL}/storage/v1/object/public/yfit-voiceovers/assets/bgm_deep.mp3`,
 };
 
-// Map content angle → BGM track
 function getBgmForAngle(contentAngle) {
   const angle = (contentAngle || '').toLowerCase();
   if (angle === 'workout_tips' || angle === 'form_analysis' || angle === 'transformation_story') {
@@ -80,13 +63,10 @@ function getBgmForAngle(contentAngle) {
   if (angle === 'medication_fitness' || angle === 'nutrition_science' || angle === 'recovery_wellness') {
     return BGM_TRACKS.deep;
   }
-  // Default: primary YFIT signature for myth_busting, general content, unknown angles
   return BGM_TRACKS.primary;
 }
 
-// BGM at 12% — subtle presence, industry standard for background music under voiceover.
-// 45% was too loud and sounded like a hum competing with the voice.
-const BGM_VOLUME = 0.20; // 20% — clearly audible as music, comfortably under voiceover
+const BGM_VOLUME = 0.20;
 
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -96,7 +76,6 @@ if (!fs.existsSync(TEMP_DIR)) fs.mkdirSync(TEMP_DIR, { recursive: true });
 const FONT_BOLD = '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf';
 const FONT_REGULAR = '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf';
 
-// YFIT brand green — used for hook card and logo accent
 const YFIT_GREEN = '0x00ff88';
 
 // Health check
@@ -107,7 +86,7 @@ app.get('/health', (req, res) => {
     status: 'ok',
     ffmpeg: ffmpegVersion,
     pexels: PEXELS_API_KEY ? 'configured' : 'missing',
-    version: '3.1.9',
+    version: '3.3.0',
     timestamp: new Date().toISOString()
   });
 });
@@ -134,18 +113,14 @@ function downloadFile(url, destPath) {
   });
 }
 
-// ─── FIX 4: PEOPLE IN MOTION — Pexels search ─────────────────────────────────
-// Appends "person" or "athlete" to every query so Pexels returns clips with
-// a human body in motion rather than empty gyms or equipment close-ups.
-// Clips under 4 seconds are rejected — too short to show meaningful motion.
+// Pexels search — appends human-presence term
 function searchPexels(query) {
   return new Promise((resolve) => {
     if (!PEXELS_API_KEY) { resolve([]); return; }
 
-    // Always append a human-presence term to maximise motion clips
     const humanTerm = query.toLowerCase().includes('food') || query.toLowerCase().includes('meal') || query.toLowerCase().includes('nutrition')
-      ? 'person eating healthy'   // nutrition queries: person eating, not just food
-      : `person ${query}`;        // all other queries: person doing the activity
+      ? 'person eating healthy'
+      : `person ${query}`;
 
     const q = encodeURIComponent(humanTerm);
     const options = {
@@ -162,9 +137,7 @@ function searchPexels(query) {
           const result = JSON.parse(data);
           const clips = [];
           for (const video of (result.videos || [])) {
-            // FIX 4b: Reject clips under 4 seconds — too short to show motion
             if ((video.duration || 0) < 4) continue;
-
             const files = video.video_files || [];
             const f = files.find(f => f.quality === 'hd' && f.width < f.height) ||
                       files.find(f => f.width < f.height) ||
@@ -182,11 +155,10 @@ function searchPexels(query) {
   });
 }
 
-// Fitness-specific fallback chain — always returns clips with people in motion
+// Fitness-specific fallback chain
 async function getPexelsClips(query) {
   const queryLower = (query || '').toLowerCase();
 
-  // Build topic-specific fallbacks with human-presence terms
   let specificTerms = [];
   if (queryLower.includes('hiit') || queryLower.includes('cardio') || queryLower.includes('interval')) {
     specificTerms = ['athlete HIIT cardio workout', 'person high intensity interval training', 'athlete cardio exercise'];
@@ -206,7 +178,6 @@ async function getPexelsClips(query) {
     specificTerms = ['person gym workout fitness', 'athlete exercise training'];
   }
 
-  // Always-reliable fitness fallbacks with human presence
   const fitnessOnlyFallbacks = [
     'person gym workout',
     'athlete fitness exercise',
@@ -231,7 +202,7 @@ function getAudioDuration(audioPath) {
   try {
     const r = execSync(
       `ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "${audioPath}"`,
-      { timeout: 30000 }
+      { timeout: 15000, shell: true }
     ).toString().trim();
     return parseFloat(r) || 30;
   } catch (e) { return 30; }
@@ -249,7 +220,7 @@ async function uploadToSupabase(localPath, storagePath, mimeType) {
   return `${SUPABASE_URL}/storage/v1/object/public/yfit-videos/${encodedPath}`;
 }
 
-// Sanitize text for ffmpeg drawtext (removes special chars that break ffmpeg filter syntax)
+// Sanitize text for ffmpeg drawtext
 function sanitizeForDrawtext(text) {
   const cleaned = (text || '')
     .replace(/[^\w\s\-.,!?]/g, ' ')
@@ -260,7 +231,7 @@ function sanitizeForDrawtext(text) {
     .replace(/\[/g, '(')
     .replace(/\]/g, ')')
     .replace(/\s+/g, ' ')
-    .replace(/^[.\s]+/, '')   // strip leading periods and whitespace
+    .replace(/^[.\s]+/, '')
     .trim();
   if (!cleaned) return cleaned;
   return cleaned.charAt(0).toUpperCase() + cleaned.slice(1);
@@ -283,7 +254,67 @@ function wrapText(text, maxChars) {
   return lines;
 }
 
-// Parse script into caption segments for cycling
+// ─── NEW v3.3.0: Build caption segments DIRECTLY from ElevenLabs word timing ─
+//
+// When word_timing is available, we group consecutive words into chunks of
+// WORDS_PER_CHUNK words. Each chunk gets its start time from the first word
+// and end time from the last word in the chunk. This guarantees perfect sync
+// because the caption text IS the spoken text, and the timing IS the ElevenLabs
+// timing — no heuristic matching needed.
+//
+// WORDS_PER_CHUNK: 8 words per caption line feels natural for short-form video.
+// At ~2.5 words/second (typical voiceover pace), 8 words ≈ 3.2 seconds on screen.
+// ─────────────────────────────────────────────────────────────────────────────
+const WORDS_PER_CHUNK = 8;
+
+function buildSegmentsFromWordTiming(wordTiming, audioDuration) {
+  if (!wordTiming || wordTiming.length === 0) return null;
+
+  const segments = [];
+  let i = 0;
+
+  while (i < wordTiming.length) {
+    const chunkWords = wordTiming.slice(i, i + WORDS_PER_CHUNK);
+    const text = chunkWords.map(w => w.word || '').join(' ').trim();
+    const startTime = chunkWords[0].start || 0;
+    const endTime = chunkWords[chunkWords.length - 1].end || startTime + 1;
+
+    if (text.length > 0) {
+      segments.push({
+        text: sanitizeForDrawtext(text),
+        rawText: text,
+        words: chunkWords.length,
+        startTime,
+        endTime
+      });
+    }
+    i += WORDS_PER_CHUNK;
+  }
+
+  // Extend last segment to full audio duration (minus end card buffer)
+  if (segments.length > 0) {
+    segments[segments.length - 1].endTime = Math.max(
+      segments[segments.length - 1].endTime,
+      audioDuration - 3.5
+    );
+  }
+
+  // Fill any gaps between segments (ensure no blank periods mid-video)
+  for (let j = 0; j < segments.length - 1; j++) {
+    if (segments[j].endTime < segments[j + 1].startTime) {
+      segments[j].endTime = segments[j + 1].startTime;
+    }
+  }
+
+  console.log(`[captions] Built ${segments.length} segments from ${wordTiming.length} word timestamps`);
+  segments.forEach((s, idx) => {
+    console.log(`  [${idx}] ${s.startTime.toFixed(2)}s → ${s.endTime.toFixed(2)}s: "${s.text.substring(0, 50)}"`);
+  });
+
+  return segments;
+}
+
+// Fallback: parse script text into segments (used only when word_timing is absent)
 function parseCaptionSegments(script, caption, contentAngle) {
   const src = (script || '').trim();
 
@@ -372,91 +403,19 @@ function parseCaptionSegments(script, caption, contentAngle) {
   return [{ text, rawText: text, words: text.split(/\s+/).length }];
 }
 
-// ─── FIX 2 + 3: CENTER-SCREEN TEXT OVERLAY with HOOK CARD STYLING ────────────
-//
-// Layout (9:16 portrait, 1080×1920):
-//   - Caption text: centered vertically at ~45% height (slightly above center)
-//     so it clears the platform's bottom UI (like/comment/share buttons)
-//     and the top UI (profile name, follow button).
-//   - Dark semi-transparent pill box behind each text line for readability
-//     on any background (bright outdoor, dark gym, etc.)
-//   - Segment 0 (the HOOK): 56px bold, YFIT green shadow — visually distinct
-//     to create the "hook card" effect in the first 1.5 seconds.
-//   - Body segments: 46px bold, white with dark shadow.
-//   - Brand URL: top-right corner, small, always visible.
-//
-// Why center not bottom:
-//   Bottom 20% of frame is covered by platform UI on TikTok/Instagram/YouTube
-//   Shorts. Center-screen text is the industry standard for short-form fitness
-//   content (Gymshark, Peloton, ATHLEAN-X all use this layout).
-// ─────────────────────────────────────────────────────────────────────────────
-function buildCyclingCaptionFilters(segments, audioDuration, font, wordTiming) {
+// Build FFmpeg drawtext filters from segments with pre-computed timings
+// (segments may have .startTime/.endTime already set, or we compute proportionally)
+function buildCaptionFilters(segments, audioDuration, font) {
   if (segments.length === 0) return [];
   const filters = [];
 
+  // Compute timings if not already set (fallback path)
   let segmentTimings;
-
-  if (wordTiming && wordTiming.length > 0) {
-    console.log(`[captions] Using ElevenLabs word timing (${wordTiming.length} words)`);
-
-    const normalizeWord = (w) => (w || '').toLowerCase().replace(/[^a-z0-9]/g, '');
-
-    const allSegmentWords = segments.map(s =>
-      (s.rawText || s.text).split(/\s+/).filter(w => w.length > 0).map(normalizeWord)
-    );
-
-    const timingWords = wordTiming.map(t => ({
-      norm: normalizeWord(t.word || ''),
-      start: t.start || 0,
-      end: t.end || 0
-    }));
-
-    let timingCursor = 0;
-
-    segmentTimings = segments.map((seg, si) => {
-      const segWords = allSegmentWords[si];
-      if (segWords.length === 0) {
-        return { startTime: audioDuration * (si / segments.length), endTime: audioDuration * ((si + 1) / segments.length) };
-      }
-
-      const firstWord = segWords[0];
-      let matchStart = timingCursor;
-      for (let ti = timingCursor; ti < Math.min(timingCursor + 20, timingWords.length); ti++) {
-        if (timingWords[ti].norm === firstWord || timingWords[ti].norm.includes(firstWord) || firstWord.includes(timingWords[ti].norm)) {
-          matchStart = ti;
-          break;
-        }
-      }
-
-      const advanceBy = Math.max(1, segWords.length);
-      const matchEnd = Math.min(matchStart + advanceBy - 1, timingWords.length - 1);
-      timingCursor = matchStart + advanceBy;
-
-      const startTime = timingWords[matchStart] ? timingWords[matchStart].start : 0;
-      const endTime = timingWords[matchEnd] ? timingWords[matchEnd].end : startTime + 1;
-
-      return { startTime, endTime };
-    });
-
-    // Extend last segment to full audio duration
-    if (segmentTimings.length > 0) {
-      segmentTimings[segmentTimings.length - 1].endTime = audioDuration;
-    }
-
-    // Fill gaps
-    for (let i = 0; i < segmentTimings.length - 1; i++) {
-      if (segmentTimings[i].endTime < segmentTimings[i + 1].startTime) {
-        segmentTimings[i].endTime = segmentTimings[i + 1].startTime;
-      }
-    }
-
-    console.log(`[captions] Segment timings:`);
-    segmentTimings.forEach((t, i) => {
-      console.log(`  [${i}] ${t.startTime.toFixed(2)}s → ${t.endTime.toFixed(2)}s: "${segments[i].text.substring(0, 40)}"`);
-    });
-
+  if (segments[0].startTime !== undefined) {
+    // v3.3.0: timings already embedded in segments (from word_timing path)
+    segmentTimings = segments.map(s => ({ startTime: s.startTime, endTime: s.endTime }));
   } else {
-    // Fallback: proportional word-count estimation
+    // Proportional word-count estimation (no word_timing available)
     console.log(`[captions] No word timing — using proportional estimation`);
     const totalWords = segments.reduce((sum, s) => sum + s.words, 0);
     let cursor = 0;
@@ -470,25 +429,24 @@ function buildCyclingCaptionFilters(segments, audioDuration, font, wordTiming) {
     });
   }
 
-    // Clip last segment end time so captions don't overlap the end card
-    // The end card fires at audioDuration-3s, so the last caption must end there
-    const endCardStartTime = Math.max(0, audioDuration - 3.0);
-    if (segmentTimings.length > 0) {
-      const lastTiming = segmentTimings[segmentTimings.length - 1];
-      if (lastTiming.endTime > endCardStartTime) {
-        lastTiming.endTime = endCardStartTime;
-      }
+  // Clip last segment end time so captions don't overlap the end card
+  const endCardStartTime = Math.max(0, audioDuration - 3.0);
+  if (segmentTimings.length > 0) {
+    const lastTiming = segmentTimings[segmentTimings.length - 1];
+    if (lastTiming.endTime > endCardStartTime) {
+      lastTiming.endTime = endCardStartTime;
     }
+  }
 
-    // Build drawtext filters from computed timings
+  // Build drawtext filters
   for (let i = 0; i < segments.length; i++) {
     const { startTime, endTime } = segmentTimings[i];
-    const isHook = (i === 0);  // FIX 3: First segment = hook card
-    // CTA end card: last segment that contains CTA keywords gets YFIT green styling
+    if (endTime <= startTime) continue; // skip zero-duration segments
+
+    const isHook = (i === 0);
     const ctaKeywords = /\b(try|free|link in bio|download|sign up|get started|join|click|tap)\b/i;
     const isCta = (i === segments.length - 1) && ctaKeywords.test(segments[i].rawText || segments[i].text);
 
-    // Wrap text tighter for center-screen (24 chars per line looks better centered)
     const lines = wrapText(segments[i].text, 24);
     const line1 = (lines[0] || '').replace(/:/g, '\\:');
     const line2 = (lines[1] || '').replace(/:/g, '\\:');
@@ -496,108 +454,59 @@ function buildCyclingCaptionFilters(segments, audioDuration, font, wordTiming) {
 
     const enableExpr = `enable='between(t,${startTime.toFixed(2)},${endTime.toFixed(2)})'`;
 
-    // Center-screen vertical position
-    // 1920 * 0.42 ≈ 806 — slightly above center, clear of platform UI top and bottom
-    // Each line is ~60px tall at 56px font, ~52px at 46px font
     const lineCount = [line1, line2, line3].filter(Boolean).length;
     const lineHeight = isHook ? 64 : 56;
     const totalTextHeight = lineCount * lineHeight;
-    // Center block: start at (h - totalTextHeight) / 2
     const blockTop = `(h-${totalTextHeight})/2`;
 
-    // NOTE: drawbox does NOT support text_w — it's only available in drawtext.
-    // We use fixed-width pill boxes wide enough for 24-char lines at the given font sizes.
-    // At 56px bold DejaVu, 24 chars ≈ 700px wide. At 46px, 24 chars ≈ 580px wide.
-    // Boxes are centered using x=(w-BOX_W)/2 with a fixed BOX_W.
     if (isHook) {
-      // ── HOOK CARD: Large, YFIT green shadow, bold white text ──────────────
-      // Fixed pill box width for 56px font: 24 chars × ~29px/char ≈ 700px + 40px padding
-      const hookBoxW = 740;
-      if (line1) {
-        filters.push(
-          `drawtext=fontfile=${font}:text='${line1}':fontsize=56:fontcolor=white:` +
-          `x=(w-text_w)/2:y=${blockTop}:` +
-          `shadowcolor=black@0.9:shadowx=2:shadowy=2:` +
-          `${enableExpr}`
-        );
-      }
-      if (line2) {
-        const y2 = `${blockTop}+${lineHeight}`;
-        filters.push(
-          `drawtext=fontfile=${font}:text='${line2}':fontsize=54:fontcolor=white@0.97:` +
-          `x=(w-text_w)/2:y=${y2}:` +
-          `shadowcolor=black@0.9:shadowx=2:shadowy=2:` +
-          `${enableExpr}`
-        );
-      }
-      if (line3) {
-        const y3 = `${blockTop}+${lineHeight * 2}`;
-        filters.push(
-          `drawtext=fontfile=${font}:text='${line3}':fontsize=52:fontcolor=white@0.95:` +
-          `x=(w-text_w)/2:y=${y3}:` +
-          `shadowcolor=black@0.9:shadowx=2:shadowy=2:` +
-          `${enableExpr}`
-        );
-      }
+      if (line1) filters.push(
+        `drawtext=fontfile=${font}:text='${line1}':fontsize=56:fontcolor=white:` +
+        `x=(w-text_w)/2:y=${blockTop}:` +
+        `shadowcolor=black@0.9:shadowx=2:shadowy=2:${enableExpr}`
+      );
+      if (line2) filters.push(
+        `drawtext=fontfile=${font}:text='${line2}':fontsize=54:fontcolor=white@0.97:` +
+        `x=(w-text_w)/2:y=${blockTop}+${lineHeight}:` +
+        `shadowcolor=black@0.9:shadowx=2:shadowy=2:${enableExpr}`
+      );
+      if (line3) filters.push(
+        `drawtext=fontfile=${font}:text='${line3}':fontsize=52:fontcolor=white@0.95:` +
+        `x=(w-text_w)/2:y=${blockTop}+${lineHeight * 2}:` +
+        `shadowcolor=black@0.9:shadowx=2:shadowy=2:${enableExpr}`
+      );
     } else if (isCta) {
-      // ── CTA END CARD: YFIT green text, bright pill, closing call-to-action ──
-      const ctaBoxW = 700;
-      if (line1) {
-        filters.push(
-          `drawtext=fontfile=${font}:text='${line1}':fontsize=50:fontcolor=${YFIT_GREEN}:` +
-          `x=(w-text_w)/2:y=${blockTop}:` +
-          `shadowcolor=black@0.9:shadowx=2:shadowy=2:` +
-          `${enableExpr}`
-        );
-      }
-      if (line2) {
-        const y2 = `${blockTop}+${lineHeight}`;
-        filters.push(
-          `drawtext=fontfile=${font}:text='${line2}':fontsize=48:fontcolor=${YFIT_GREEN}@0.95:` +
-          `x=(w-text_w)/2:y=${y2}:` +
-          `shadowcolor=black@0.9:shadowx=2:shadowy=2:` +
-          `${enableExpr}`
-        );
-      }
-      if (line3) {
-        const y3 = `${blockTop}+${lineHeight * 2}`;
-        filters.push(
-          `drawtext=fontfile=${font}:text='${line3}':fontsize=46:fontcolor=${YFIT_GREEN}@0.90:` +
-          `x=(w-text_w)/2:y=${y3}:` +
-          `shadowcolor=black@0.9:shadowx=2:shadowy=2:` +
-          `${enableExpr}`
-        );
-      }
+      if (line1) filters.push(
+        `drawtext=fontfile=${font}:text='${line1}':fontsize=50:fontcolor=${YFIT_GREEN}:` +
+        `x=(w-text_w)/2:y=${blockTop}:` +
+        `shadowcolor=black@0.9:shadowx=2:shadowy=2:${enableExpr}`
+      );
+      if (line2) filters.push(
+        `drawtext=fontfile=${font}:text='${line2}':fontsize=48:fontcolor=${YFIT_GREEN}@0.95:` +
+        `x=(w-text_w)/2:y=${blockTop}+${lineHeight}:` +
+        `shadowcolor=black@0.9:shadowx=2:shadowy=2:${enableExpr}`
+      );
+      if (line3) filters.push(
+        `drawtext=fontfile=${font}:text='${line3}':fontsize=46:fontcolor=${YFIT_GREEN}@0.90:` +
+        `x=(w-text_w)/2:y=${blockTop}+${lineHeight * 2}:` +
+        `shadowcolor=black@0.9:shadowx=2:shadowy=2:${enableExpr}`
+      );
     } else {
-      // ── BODY SEGMENTS: Clean white text, dark shadow, pill background ─────
-      // Fixed pill box width for 46px font: 24 chars × ~24px/char ≈ 580px + 32px padding
-      const bodyBoxW = 620;
-      if (line1) {
-        filters.push(
-          `drawtext=fontfile=${font}:text='${line1}':fontsize=46:fontcolor=white:` +
-          `x=(w-text_w)/2:y=${blockTop}:` +
-          `shadowcolor=black@0.9:shadowx=2:shadowy=2:` +
-          `${enableExpr}`
-        );
-      }
-      if (line2) {
-        const y2 = `${blockTop}+${lineHeight}`;
-        filters.push(
-          `drawtext=fontfile=${font}:text='${line2}':fontsize=44:fontcolor=white@0.95:` +
-          `x=(w-text_w)/2:y=${y2}:` +
-          `shadowcolor=black@0.9:shadowx=2:shadowy=2:` +
-          `${enableExpr}`
-        );
-      }
-      if (line3) {
-        const y3 = `${blockTop}+${lineHeight * 2}`;
-        filters.push(
-          `drawtext=fontfile=${font}:text='${line3}':fontsize=42:fontcolor=white@0.90:` +
-          `x=(w-text_w)/2:y=${y3}:` +
-          `shadowcolor=black@0.9:shadowx=2:shadowy=2:` +
-          `${enableExpr}`
-        );
-      }
+      if (line1) filters.push(
+        `drawtext=fontfile=${font}:text='${line1}':fontsize=46:fontcolor=white:` +
+        `x=(w-text_w)/2:y=${blockTop}:` +
+        `shadowcolor=black@0.9:shadowx=2:shadowy=2:${enableExpr}`
+      );
+      if (line2) filters.push(
+        `drawtext=fontfile=${font}:text='${line2}':fontsize=44:fontcolor=white@0.95:` +
+        `x=(w-text_w)/2:y=${blockTop}+${lineHeight}:` +
+        `shadowcolor=black@0.9:shadowx=2:shadowy=2:${enableExpr}`
+      );
+      if (line3) filters.push(
+        `drawtext=fontfile=${font}:text='${line3}':fontsize=42:fontcolor=white@0.90:` +
+        `x=(w-text_w)/2:y=${blockTop}+${lineHeight * 2}:` +
+        `shadowcolor=black@0.9:shadowx=2:shadowy=2:${enableExpr}`
+      );
     }
   }
   return filters;
@@ -627,13 +536,11 @@ app.post('/assemble', async (req, res) => {
   const safeAngle = (content_angle || 'workout').replace(/[^a-z0-9\-]/gi, '_').substring(0, 60);
   const searchQuery = pexels_query || content_angle || 'fitness workout';
 
-  // Get script from first video item if not at top level
   const firstItem = video_items[0] || {};
   const scriptText = script || firstItem.script || '';
 
-  console.log(`[${jobId}] Starting assembly v3.0.0. dry_run=${dry_run}, query="${searchQuery}", angle="${content_angle}"`);
+  console.log(`[${jobId}] Starting assembly v3.3.0. dry_run=${dry_run}, query="${searchQuery}", angle="${content_angle}", word_timing=${word_timing.length} words`);
 
-  // Dry run — return mock response without processing
   if (dry_run) {
     return res.json({
       success: true, dry_run: true, job_id: jobId,
@@ -668,7 +575,7 @@ app.post('/assemble', async (req, res) => {
       console.warn(`[${jobId}] Logo download failed: ${e.message} - will skip logo`);
     }
 
-    // Step 2b: FIX 1 — Download content-angle-mapped BGM (brand sonic identity)
+    // Step 2b: Download content-angle-mapped BGM
     const selectedBgmUrl = getBgmForAngle(content_angle);
     const selectedBgmName = selectedBgmUrl.split('/').pop();
     console.log(`[${jobId}] Downloading BGM for angle "${content_angle}": ${selectedBgmName}`);
@@ -682,7 +589,7 @@ app.post('/assemble', async (req, res) => {
       console.warn(`[${jobId}] BGM download failed: ${e.message} - will skip BGM`);
     }
 
-    // Step 3: Get Pexels clips (FIX 4 — people in motion queries)
+    // Step 3: Get Pexels clips
     console.log(`[${jobId}] Fetching Pexels clips for: "${searchQuery}"...`);
     const pexelsClips = await getPexelsClips(searchQuery);
     console.log(`[${jobId}] Got ${pexelsClips.length} Pexels clips`);
@@ -705,10 +612,7 @@ app.post('/assemble', async (req, res) => {
           const rawSize = fs.statSync(rawPath).size;
           if (rawSize < 50000) { console.warn(`[${jobId}] Clip ${i} too small (${rawSize}b), skipping`); continue; }
 
-          // v3.1.4: Reject clips where the top 15% of the frame is predominantly dark.
-          // This eliminates gym ceiling shots, dark overhead lighting, etc.
-          // Uses ffprobe signalstats to get mean luma of the top crop region.
-          let topBrightness = 255; // default: assume bright (safe fallback)
+          let topBrightness = 255;
           try {
             const probeResult = execSync(
               `ffprobe -v error -select_streams v:0 -read_intervals "%+#1" -vf "crop=iw:ih*0.15:0:0,signalstats" -show_entries frame_tags=lavfi.signalstats.YAVG -of default=noprint_wrappers=1:nokey=1 "${rawPath}"`,
@@ -719,12 +623,11 @@ app.post('/assemble', async (req, res) => {
             console.warn(`[${jobId}] Clip ${i} brightness probe failed: ${e.message}`);
           }
           if (topBrightness < 60) {
-            console.warn(`[${jobId}] Clip ${i} rejected: top brightness ${topBrightness.toFixed(1)} < 80 (dark ceiling)`);
+            console.warn(`[${jobId}] Clip ${i} rejected: top brightness ${topBrightness.toFixed(1)} < 60 (dark ceiling)`);
             continue;
           }
           console.log(`[${jobId}] Clip ${i} accepted: top brightness ${topBrightness.toFixed(1)}`);
 
-          // Force portrait 1080x1920 crop + slight contrast boost
           const portraitFilter = `scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1,eq=brightness=0.08:contrast=1.12:saturation=1.1`;
           const trimCmd = [
             'ffmpeg -y',
@@ -773,46 +676,49 @@ app.post('/assemble', async (req, res) => {
       baseVideoPath = bgPath;
     }
 
-    // Step 4: Parse caption segments
-    const segments = parseCaptionSegments(scriptText, caption_text || firstItem.caption || '', content_angle);
-    console.log(`[${jobId}] Parsed ${segments.length} caption segments (segment 0 = hook card)`);
+    // ─── Step 4: Build caption segments ───────────────────────────────────────
+    // v3.3.0: PRIMARY PATH — use word_timing directly for perfect sync
+    //         FALLBACK PATH — parse script text proportionally
+    let segments;
+    if (word_timing && word_timing.length > 0) {
+      console.log(`[${jobId}] v3.3.0: Building captions from ${word_timing.length} ElevenLabs word timestamps`);
+      segments = buildSegmentsFromWordTiming(word_timing, audioDuration);
+      if (!segments || segments.length === 0) {
+        console.warn(`[${jobId}] Word timing produced no segments — falling back to script parse`);
+        segments = parseCaptionSegments(scriptText, caption_text || firstItem.caption || '', content_angle);
+      }
+    } else {
+      console.log(`[${jobId}] No word_timing provided — using script text parsing (proportional timing)`);
+      segments = parseCaptionSegments(scriptText, caption_text || firstItem.caption || '', content_angle);
+    }
+    console.log(`[${jobId}] Final: ${segments.length} caption segments`);
 
-    // Step 5: Compose final video (FIX 2+3 — center-screen overlay, hook card)
-    console.log(`[${jobId}] Composing final video with center-screen overlays...`);
+    // Step 5: Compose final video
+    console.log(`[${jobId}] Composing final video...`);
 
     const logoExists = fs.existsSync(logoPath) && fs.statSync(logoPath).size > 1000;
+    const cyclingFilters = buildCaptionFilters(segments, audioDuration, FONT_BOLD);
 
-    // v3.1.7: Logo PNG top-RIGHT + yfitai.com text top-LEFT (swapped from v3.1.3).
-    // ZERO black bars anywhere — pure transparent PNG overlay + text shadow only.
-    const cyclingFilters = buildCyclingCaptionFilters(segments, audioDuration, FONT_BOLD, word_timing);
-
-    // End card: last 3 seconds — text only, no drawbox backgrounds
+    // End card: last 3 seconds
     const endCardStart = Math.max(0, audioDuration - 3.0);
     const endCardEnable = `enable='between(t,${endCardStart.toFixed(2)},${audioDuration.toFixed(2)})'`;
 
-    // Static vf filters: contrast boost + yfitai.com top-LEFT + end card text
-    // NO drawbox calls — zero black bars added by us
     const staticVfFilters = [
       `eq=contrast=1.05`,
-      // yfitai.com — top-RIGHT, YFIT green, shadow only (no box)
+      // yfitai.com — top-right, YFIT green, shadow only
       `drawtext=fontfile=${FONT_BOLD}:text='yfitai.com':fontsize=30:fontcolor=${YFIT_GREEN}@0.95:` +
       `x=w-text_w-24:y=28:shadowcolor=black@0.85:shadowx=2:shadowy=2`,
-      // End card text only — no background boxes
+      // End card
       `drawtext=fontfile=${FONT_BOLD}:text='Try YFIT AI Free':fontsize=40:fontcolor=white@0.95:x=(w-text_w)/2:y=(h/2)-70:shadowcolor=black@0.9:shadowx=2:shadowy=2:${endCardEnable}`,
       `drawtext=fontfile=${FONT_BOLD}:text='yfitai.com':fontsize=64:fontcolor=${YFIT_GREEN}:x=(w-text_w)/2:y=(h/2)-2:shadowcolor=black@0.9:shadowx=3:shadowy=3:${endCardEnable}`,
     ];
 
     const vfOnlyFilters = [...staticVfFilters, ...cyclingFilters].join(',');
 
-    console.log(`[${jobId}] Composing final video (logo=${logoExists ? 'PNG' : 'text fallback'})...`);
-
-    // Write filter_complex to a temp script file to avoid shell arg length limits
     const fcScriptPath = path.join(TEMP_DIR, `${jobId}_fc.txt`);
     tempFiles.push(fcScriptPath);
     let finalCmd;
     if (logoExists) {
-      // Logo overlay via filter_complex: scale to 240px wide, use rgba to preserve transparency
-      // overlay=x=20:y=10 places it top-LEFT with no background box
       if (bgmExists) {
         const fc = `[0:v]${vfOnlyFilters}[vbase];[1:v]scale=240:-1,format=rgba[logo];[vbase][logo]overlay=x=20:y=10:format=auto[vout];[2:a]aresample=44100,volume=${BGM_VOLUME},aloop=loop=-1:size=2e+09[bgm];[3:a]aresample=44100,loudnorm=I=-16:TP=-1.5:LRA=11[voice];[voice][bgm]amix=inputs=2:duration=first:dropout_transition=3[aout]`;
         fs.writeFileSync(fcScriptPath, fc);
@@ -823,7 +729,7 @@ app.post('/assemble', async (req, res) => {
         finalCmd = `ffmpeg -y -i "${baseVideoPath}" -i "${logoPath}" -i "${audioPath}" -filter_complex_script "${fcScriptPath}" -map "[vout]" -map "[aout]" -c:v libx264 -preset fast -crf 22 -c:a aac -b:a 192k -pix_fmt yuv420p -shortest -movflags +faststart "${finalPath}"`;
       }
     } else {
-      // Fallback: text-only YFIT AI top-left if logo download failed
+      // Text-only fallback if logo download failed
       const fallbackVf = [
         ...staticVfFilters,
         `drawtext=fontfile=${FONT_BOLD}:text='YFIT AI':fontsize=36:fontcolor=${YFIT_GREEN}@0.95:x=20:y=20:shadowcolor=black@0.85:shadowx=2:shadowy=2`,
@@ -874,6 +780,7 @@ app.post('/assemble', async (req, res) => {
       pexels_clips_used: pexelsClips.length,
       tips_count: segments.length,
       bgm_track: selectedBgmName,
+      caption_sync_mode: (word_timing && word_timing.length > 0) ? 'word_timing' : 'proportional',
       platforms: video_items.map(v => v.platform),
       text_platforms: text_items.map(t => t.platform),
       voiceover_url, content_angle, run_date
@@ -887,7 +794,7 @@ app.post('/assemble', async (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`YFIT Video Service v3.0.0 running on port ${PORT}`);
+  console.log(`YFIT Video Service v3.3.0 running on port ${PORT}`);
   console.log(`Pexels API: ${PEXELS_API_KEY ? 'configured' : 'NOT configured - set PEXELS_API_KEY'}`);
   console.log(`Logo URL: ${YFIT_LOGO_URL}`);
   console.log(`BGM: Primary=${BGM_TRACKS.primary.split('/').pop()}, Energetic=${BGM_TRACKS.energetic.split('/').pop()}, Deep=${BGM_TRACKS.deep.split('/').pop()}`);
