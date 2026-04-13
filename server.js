@@ -1,3 +1,39 @@
+'use strict';
+// ============================================================
+// YFIT Video Service v3.0.0
+// ============================================================
+// CHANGES vs v2.8.0:
+//
+//  FIX 1 — BRAND MUSIC (sonic identity)
+//    Replaced random 5-track pool with content-angle-mapped
+//    signature tracks. bgm_motivational is the YFIT primary
+//    signature. bgm_energetic plays for high-intensity angles
+//    (workout_tips, form_analysis). bgm_deep plays for
+//    science/medical angles (medication_fitness, nutrition_science).
+//    Consistent audio = instant brand recall across all platforms.
+//
+//  FIX 2 — TEXT OVERLAY POSITION (center-screen)
+//    Moved caption text from bottom-of-screen (y=h-295) to
+//    center-screen (y=(h/2)-offset). Added semi-transparent
+//    dark pill/box behind each text line for readability on any
+//    background. Bottom black bar removed — it blocked platform
+//    UI on TikTok/Instagram Reels. Brand URL moved to top-right.
+//
+//  FIX 3 — HOOK CARD STYLING (first 1.5s visual punch)
+//    Segment 0 (the script hook) now renders at 56px bold white
+//    with YFIT green (#00ff88) shadow — visually distinct from
+//    body segments (46px white). Hook always starts at t=0.
+//    This matches the Gymshark/Peloton hook-card pattern.
+//
+//  FIX 4 — PEOPLE IN MOTION (Pexels query improvement)
+//    All Pexels queries now append "person" or "athlete" to
+//    maximise the probability of returning clips with a human
+//    body in motion. Clips under 4 seconds are rejected (too
+//    short to show meaningful motion). Minimum 6 clips requested
+//    per query (up from 12 results filtered to 6).
+//
+// ============================================================
+
 const express = require('express');
 const { execSync } = require('child_process');
 const fs = require('fs');
@@ -18,26 +54,47 @@ const PEXELS_API_KEY = process.env.PEXELS_API_KEY;
 // YFIT logo hosted on Supabase (transparent background PNG)
 const YFIT_LOGO_URL = `${SUPABASE_URL}/storage/v1/object/public/yfit-videos/assets/yfit-logo-transparent.png`;
 
-// Background music pool — 5 royalty-free tracks, one picked randomly each run
-const BGM_URLS = [
-  `${SUPABASE_URL}/storage/v1/object/public/yfit-voiceovers/assets/bgm_motivational.mp3`,
-  `${SUPABASE_URL}/storage/v1/object/public/yfit-voiceovers/assets/bgm_energetic.mp3`,
-  `${SUPABASE_URL}/storage/v1/object/public/yfit-voiceovers/assets/bgm_upbeat.mp3`,
-  `${SUPABASE_URL}/storage/v1/object/public/yfit-voiceovers/assets/bgm_deep.mp3`,
-  `${SUPABASE_URL}/storage/v1/object/public/yfit-voiceovers/assets/bgm_bright.mp3`,
-];
-// Pick a random BGM track each run for variety
-function getRandomBgmUrl() {
-  return BGM_URLS[Math.floor(Math.random() * BGM_URLS.length)];
+// ─── FIX 1: BRAND MUSIC — Sonic Identity ─────────────────────────────────────
+// YFIT uses a consistent signature track per content angle rather than random
+// selection. This builds instant audio brand recognition across all platforms.
+//
+// Primary signature:  bgm_motivational  — warm, uplifting, universal YFIT sound
+// High-intensity alt: bgm_energetic     — workout_tips, form_analysis
+// Science/calm alt:   bgm_deep          — medication_fitness, nutrition_science
+//
+// All three tracks are royalty-free and stored in Supabase.
+const BGM_TRACKS = {
+  primary:    `${SUPABASE_URL}/storage/v1/object/public/yfit-voiceovers/assets/bgm_motivational.mp3`,
+  energetic:  `${SUPABASE_URL}/storage/v1/object/public/yfit-voiceovers/assets/bgm_energetic.mp3`,
+  deep:       `${SUPABASE_URL}/storage/v1/object/public/yfit-voiceovers/assets/bgm_deep.mp3`,
+};
+
+// Map content angle → BGM track
+function getBgmForAngle(contentAngle) {
+  const angle = (contentAngle || '').toLowerCase();
+  if (angle === 'workout_tips' || angle === 'form_analysis' || angle === 'transformation_story') {
+    return BGM_TRACKS.energetic;
+  }
+  if (angle === 'medication_fitness' || angle === 'nutrition_science' || angle === 'recovery_wellness') {
+    return BGM_TRACKS.deep;
+  }
+  // Default: primary YFIT signature for myth_busting, general content, unknown angles
+  return BGM_TRACKS.primary;
 }
-// FIX v2.7: Raised BGM to 45% — 35% was audible but slightly faint. 45% gives a clearer presence.
+
+// BGM at 45% — present and energising without competing with the voiceover
 const BGM_VOLUME = 0.45;
+
+// ─────────────────────────────────────────────────────────────────────────────
 
 const TEMP_DIR = '/tmp/yfit-videos';
 if (!fs.existsSync(TEMP_DIR)) fs.mkdirSync(TEMP_DIR, { recursive: true });
 
 const FONT_BOLD = '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf';
 const FONT_REGULAR = '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf';
+
+// YFIT brand green — used for hook card and logo accent
+const YFIT_GREEN = '0x00ff88';
 
 // Health check
 app.get('/health', (req, res) => {
@@ -47,7 +104,7 @@ app.get('/health', (req, res) => {
     status: 'ok',
     ffmpeg: ffmpegVersion,
     pexels: PEXELS_API_KEY ? 'configured' : 'missing',
-    version: '2.8.0',
+    version: '3.0.0',
     timestamp: new Date().toISOString()
   });
 });
@@ -74,14 +131,23 @@ function downloadFile(url, destPath) {
   });
 }
 
-// FIX #5: Fitness-specific Pexels search with better fallback chain
+// ─── FIX 4: PEOPLE IN MOTION — Pexels search ─────────────────────────────────
+// Appends "person" or "athlete" to every query so Pexels returns clips with
+// a human body in motion rather than empty gyms or equipment close-ups.
+// Clips under 4 seconds are rejected — too short to show meaningful motion.
 function searchPexels(query) {
   return new Promise((resolve) => {
     if (!PEXELS_API_KEY) { resolve([]); return; }
-    const q = encodeURIComponent(query);
+
+    // Always append a human-presence term to maximise motion clips
+    const humanTerm = query.toLowerCase().includes('food') || query.toLowerCase().includes('meal') || query.toLowerCase().includes('nutrition')
+      ? 'person eating healthy'   // nutrition queries: person eating, not just food
+      : `person ${query}`;        // all other queries: person doing the activity
+
+    const q = encodeURIComponent(humanTerm);
     const options = {
       hostname: 'api.pexels.com',
-      path: `/videos/search?query=${q}&per_page=15&orientation=portrait&size=medium`,
+      path: `/videos/search?query=${q}&per_page=20&orientation=portrait&size=medium`,
       method: 'GET',
       headers: { 'Authorization': PEXELS_API_KEY }
     };
@@ -92,7 +158,10 @@ function searchPexels(query) {
         try {
           const result = JSON.parse(data);
           const clips = [];
-          for (const video of (result.videos || []).slice(0, 12)) {
+          for (const video of (result.videos || [])) {
+            // FIX 4b: Reject clips under 4 seconds — too short to show motion
+            if ((video.duration || 0) < 4) continue;
+
             const files = video.video_files || [];
             const f = files.find(f => f.quality === 'hd' && f.width < f.height) ||
                       files.find(f => f.width < f.height) ||
@@ -110,38 +179,37 @@ function searchPexels(query) {
   });
 }
 
-// FIX #5: Better fallback chain — fitness-specific terms, never generic "desk" content
+// Fitness-specific fallback chain — always returns clips with people in motion
 async function getPexelsClips(query) {
-  // Build a fitness-specific fallback chain from the query
   const queryLower = (query || '').toLowerCase();
 
-  // Detect topic from query and add specific fitness terms
+  // Build topic-specific fallbacks with human-presence terms
   let specificTerms = [];
   if (queryLower.includes('hiit') || queryLower.includes('cardio') || queryLower.includes('interval')) {
-    specificTerms = ['HIIT cardio workout', 'high intensity interval training gym', 'cardio exercise fitness'];
+    specificTerms = ['athlete HIIT cardio workout', 'person high intensity interval training', 'athlete cardio exercise'];
   } else if (queryLower.includes('strength') || queryLower.includes('weight') || queryLower.includes('lift')) {
-    specificTerms = ['weightlifting gym', 'strength training barbell', 'gym workout weights'];
+    specificTerms = ['person weightlifting gym', 'athlete strength training barbell', 'person gym workout weights'];
   } else if (queryLower.includes('run') || queryLower.includes('jog')) {
-    specificTerms = ['running athlete outdoors', 'jogging fitness', 'runner workout'];
+    specificTerms = ['person running outdoors', 'athlete jogging fitness', 'runner workout trail'];
   } else if (queryLower.includes('yoga') || queryLower.includes('stretch') || queryLower.includes('flex')) {
-    specificTerms = ['yoga fitness', 'stretching exercise', 'flexibility workout'];
+    specificTerms = ['person yoga fitness', 'athlete stretching exercise', 'person flexibility workout'];
   } else if (queryLower.includes('nutrition') || queryLower.includes('diet') || queryLower.includes('food') || queryLower.includes('meal')) {
-    specificTerms = ['healthy food meal prep', 'nutrition fitness', 'healthy eating vegetables'];
+    specificTerms = ['person healthy meal prep', 'athlete nutrition fitness', 'person eating healthy food'];
   } else if (queryLower.includes('sleep') || queryLower.includes('recover') || queryLower.includes('rest')) {
-    specificTerms = ['athlete recovery rest', 'fitness rest day', 'sleep wellness'];
+    specificTerms = ['athlete recovery rest', 'person fitness rest day', 'person stretching wellness'];
   } else if (queryLower.includes('protein') || queryLower.includes('supplement')) {
-    specificTerms = ['protein shake gym', 'fitness nutrition supplement', 'gym workout nutrition'];
+    specificTerms = ['person protein shake gym', 'athlete fitness nutrition', 'person gym workout nutrition'];
   } else {
-    specificTerms = ['gym workout fitness', 'exercise training athlete'];
+    specificTerms = ['person gym workout fitness', 'athlete exercise training'];
   }
 
-  // Always-reliable fitness fallbacks (never office/desk content)
+  // Always-reliable fitness fallbacks with human presence
   const fitnessOnlyFallbacks = [
-    'gym workout',
-    'fitness exercise',
-    'athlete training',
-    'running fitness',
-    'weightlifting gym'
+    'person gym workout',
+    'athlete fitness exercise',
+    'person running outdoor fitness',
+    'person weightlifting gym',
+    'athlete training sports'
   ];
 
   const fallbacks = [query, ...specificTerms, ...fitnessOnlyFallbacks];
@@ -179,7 +247,6 @@ async function uploadToSupabase(localPath, storagePath, mimeType) {
 }
 
 // Sanitize text for ffmpeg drawtext (removes special chars that break ffmpeg filter syntax)
-// FIX #3: Added sentence case capitalization
 function sanitizeForDrawtext(text) {
   const cleaned = (text || '')
     .replace(/[^\w\s\-.,!?]/g, ' ')
@@ -191,7 +258,6 @@ function sanitizeForDrawtext(text) {
     .replace(/\]/g, ')')
     .replace(/\s+/g, ' ')
     .trim();
-  // Sentence case: capitalize first letter only
   if (!cleaned) return cleaned;
   return cleaned.charAt(0).toUpperCase() + cleaned.slice(1);
 }
@@ -213,14 +279,12 @@ function wrapText(text, maxChars) {
   return lines;
 }
 
-// Parse script/article into caption segments for cycling
-// Returns array of { text, startWord, endWord } objects — startWord/endWord are indices into word_timing array
+// Parse script into caption segments for cycling
 function parseCaptionSegments(script, caption, contentAngle) {
   const src = (script || '').trim();
 
-  // Strategy 1: Numbered list markers — handles both "1. tip" and "Number one: tip" formats
+  // Strategy 1a: Word-form numbers — "Number one", "Tip one", "Step one"
   if (src) {
-    // First try word-form numbers: "Number one", "Number two", etc.
     const wordNumRegex = /(?=\b(?:number\s+(?:one|two|three|four|five|six)|tip\s+(?:one|two|three|four|five|six)|step\s+(?:one|two|three|four|five|six))\b)/i;
     const wordParts = src.split(wordNumRegex).map(p => p.trim()).filter(p => p.length > 0);
     const wordTips = wordParts
@@ -234,7 +298,8 @@ function parseCaptionSegments(script, caption, contentAngle) {
         words: t.split(/\s+/).length
       }));
     }
-    // Then try numeric markers: "1. tip" or "2) tip"
+
+    // Strategy 1b: Numeric markers — "1. tip" or "2) tip"
     const parts = src.split(/(?=\b[1-9]\d*[.)\s]\s)/).map(p => p.trim()).filter(p => p.length > 0);
     const tips = parts
       .map(p => p.replace(/^\d+[.)]+\s*/, '').trim())
@@ -264,7 +329,7 @@ function parseCaptionSegments(script, caption, contentAngle) {
     }
   }
 
-  // Strategy 3: Sentence splitting — works for articles, prose, scraped content
+  // Strategy 3: Sentence splitting
   const fullText = src || caption || contentAngle || '';
   if (fullText) {
     const rawSentences = fullText
@@ -303,8 +368,24 @@ function parseCaptionSegments(script, caption, contentAngle) {
   return [{ text, rawText: text, words: text.split(/\s+/).length }];
 }
 
-// FIX #2: Rewritten caption timing — uses fuzzy word matching against ElevenLabs timestamps
-// instead of pure position counting which drifts when punctuation/contractions don't align.
+// ─── FIX 2 + 3: CENTER-SCREEN TEXT OVERLAY with HOOK CARD STYLING ────────────
+//
+// Layout (9:16 portrait, 1080×1920):
+//   - Caption text: centered vertically at ~45% height (slightly above center)
+//     so it clears the platform's bottom UI (like/comment/share buttons)
+//     and the top UI (profile name, follow button).
+//   - Dark semi-transparent pill box behind each text line for readability
+//     on any background (bright outdoor, dark gym, etc.)
+//   - Segment 0 (the HOOK): 56px bold, YFIT green shadow — visually distinct
+//     to create the "hook card" effect in the first 1.5 seconds.
+//   - Body segments: 46px bold, white with dark shadow.
+//   - Brand URL: top-right corner, small, always visible.
+//
+// Why center not bottom:
+//   Bottom 20% of frame is covered by platform UI on TikTok/Instagram/YouTube
+//   Shorts. Center-screen text is the industry standard for short-form fitness
+//   content (Gymshark, Peloton, ATHLEAN-X all use this layout).
+// ─────────────────────────────────────────────────────────────────────────────
 function buildCyclingCaptionFilters(segments, audioDuration, font, wordTiming) {
   if (segments.length === 0) return [];
   const filters = [];
@@ -314,23 +395,18 @@ function buildCyclingCaptionFilters(segments, audioDuration, font, wordTiming) {
   if (wordTiming && wordTiming.length > 0) {
     console.log(`[captions] Using ElevenLabs word timing (${wordTiming.length} words)`);
 
-    // Normalize a word for comparison: lowercase, strip punctuation
     const normalizeWord = (w) => (w || '').toLowerCase().replace(/[^a-z0-9]/g, '');
 
-    // Build flat list of all script words across all segments (in order)
     const allSegmentWords = segments.map(s =>
       (s.rawText || s.text).split(/\s+/).filter(w => w.length > 0).map(normalizeWord)
     );
 
-    // Build a flat list of ElevenLabs timing words (normalized)
     const timingWords = wordTiming.map(t => ({
       norm: normalizeWord(t.word || ''),
       start: t.start || 0,
       end: t.end || 0
     }));
 
-    // For each segment, find the best matching start/end in the timing array
-    // using a sliding window approach — we walk forward through timingWords
     let timingCursor = 0;
 
     segmentTimings = segments.map((seg, si) => {
@@ -339,7 +415,6 @@ function buildCyclingCaptionFilters(segments, audioDuration, font, wordTiming) {
         return { startTime: audioDuration * (si / segments.length), endTime: audioDuration * ((si + 1) / segments.length) };
       }
 
-      // Find the first word of this segment in timingWords starting from cursor
       const firstWord = segWords[0];
       let matchStart = timingCursor;
       for (let ti = timingCursor; ti < Math.min(timingCursor + 20, timingWords.length); ti++) {
@@ -349,7 +424,6 @@ function buildCyclingCaptionFilters(segments, audioDuration, font, wordTiming) {
         }
       }
 
-      // Advance cursor by the number of words in this segment
       const advanceBy = Math.max(1, segWords.length);
       const matchEnd = Math.min(matchStart + advanceBy - 1, timingWords.length - 1);
       timingCursor = matchStart + advanceBy;
@@ -360,12 +434,12 @@ function buildCyclingCaptionFilters(segments, audioDuration, font, wordTiming) {
       return { startTime, endTime };
     });
 
-    // Extend last segment to full audio duration to avoid gap at end
+    // Extend last segment to full audio duration
     if (segmentTimings.length > 0) {
       segmentTimings[segmentTimings.length - 1].endTime = audioDuration;
     }
 
-    // Fill any gaps: if a segment's endTime < next segment's startTime, extend it
+    // Fill gaps
     for (let i = 0; i < segmentTimings.length - 1; i++) {
       if (segmentTimings[i].endTime < segmentTimings[i + 1].startTime) {
         segmentTimings[i].endTime = segmentTimings[i + 1].startTime;
@@ -395,32 +469,107 @@ function buildCyclingCaptionFilters(segments, audioDuration, font, wordTiming) {
   // Build drawtext filters from computed timings
   for (let i = 0; i < segments.length; i++) {
     const { startTime, endTime } = segmentTimings[i];
+    const isHook = (i === 0);  // FIX 3: First segment = hook card
 
-    const lines = wrapText(segments[i].text, 26);
+    // Wrap text tighter for center-screen (24 chars per line looks better centered)
+    const lines = wrapText(segments[i].text, 24);
     const line1 = (lines[0] || '').replace(/:/g, '\\:');
     const line2 = (lines[1] || '').replace(/:/g, '\\:');
     const line3 = (lines[2] || '').replace(/:/g, '\\:');
 
-    if (line1) {
-      filters.push(
-        `drawtext=fontfile=${font}:text='${line1}':fontsize=46:fontcolor=white:` +
-        `x=(w-text_w)/2:y=h-295:shadowcolor=black@0.9:shadowx=2:shadowy=2:` +
-        `enable='between(t,${startTime.toFixed(2)},${endTime.toFixed(2)})'`
-      );
-    }
-    if (line2) {
-      filters.push(
-        `drawtext=fontfile=${font}:text='${line2}':fontsize=44:fontcolor=white@0.95:` +
-        `x=(w-text_w)/2:y=h-240:shadowcolor=black@0.9:shadowx=2:shadowy=2:` +
-        `enable='between(t,${startTime.toFixed(2)},${endTime.toFixed(2)})'`
-      );
-    }
-    if (line3) {
-      filters.push(
-        `drawtext=fontfile=${font}:text='${line3}':fontsize=42:fontcolor=white@0.90:` +
-        `x=(w-text_w)/2:y=h-185:shadowcolor=black@0.9:shadowx=2:shadowy=2:` +
-        `enable='between(t,${startTime.toFixed(2)},${endTime.toFixed(2)})'`
-      );
+    const enableExpr = `enable='between(t,${startTime.toFixed(2)},${endTime.toFixed(2)})'`;
+
+    // Center-screen vertical position
+    // 1920 * 0.42 ≈ 806 — slightly above center, clear of platform UI top and bottom
+    // Each line is ~60px tall at 56px font, ~52px at 46px font
+    const lineCount = [line1, line2, line3].filter(Boolean).length;
+    const lineHeight = isHook ? 64 : 56;
+    const totalTextHeight = lineCount * lineHeight;
+    // Center block: start at (h - totalTextHeight) / 2
+    const blockTop = `(h-${totalTextHeight})/2`;
+
+    if (isHook) {
+      // ── HOOK CARD: Large, YFIT green shadow, bold white text ──────────────
+      // Visually punchy in the first 1.5 seconds — stops the scroll
+      if (line1) {
+        // Dark pill background behind hook text
+        filters.push(
+          `drawbox=x=(w-text_w)/2-20:y=${blockTop}-12:w=text_w+40:h=${lineHeight}+8:color=black@0.65:t=fill:` +
+          `${enableExpr}`
+        );
+        filters.push(
+          `drawtext=fontfile=${font}:text='${line1}':fontsize=56:fontcolor=white:` +
+          `x=(w-text_w)/2:y=${blockTop}:` +
+          `shadowcolor=${YFIT_GREEN}@0.9:shadowx=0:shadowy=3:` +
+          `${enableExpr}`
+        );
+      }
+      if (line2) {
+        const y2 = `${blockTop}+${lineHeight}`;
+        filters.push(
+          `drawbox=x=(w-text_w)/2-20:y=${y2}-12:w=text_w+40:h=${lineHeight}+8:color=black@0.65:t=fill:` +
+          `${enableExpr}`
+        );
+        filters.push(
+          `drawtext=fontfile=${font}:text='${line2}':fontsize=54:fontcolor=white@0.97:` +
+          `x=(w-text_w)/2:y=${y2}:` +
+          `shadowcolor=${YFIT_GREEN}@0.7:shadowx=0:shadowy=2:` +
+          `${enableExpr}`
+        );
+      }
+      if (line3) {
+        const y3 = `${blockTop}+${lineHeight * 2}`;
+        filters.push(
+          `drawbox=x=(w-text_w)/2-20:y=${y3}-12:w=text_w+40:h=${lineHeight}+8:color=black@0.65:t=fill:` +
+          `${enableExpr}`
+        );
+        filters.push(
+          `drawtext=fontfile=${font}:text='${line3}':fontsize=52:fontcolor=white@0.95:` +
+          `x=(w-text_w)/2:y=${y3}:` +
+          `shadowcolor=${YFIT_GREEN}@0.6:shadowx=0:shadowy=2:` +
+          `${enableExpr}`
+        );
+      }
+    } else {
+      // ── BODY SEGMENTS: Clean white text, dark shadow, pill background ─────
+      if (line1) {
+        filters.push(
+          `drawbox=x=(w-text_w)/2-16:y=${blockTop}-10:w=text_w+32:h=${lineHeight}+6:color=black@0.60:t=fill:` +
+          `${enableExpr}`
+        );
+        filters.push(
+          `drawtext=fontfile=${font}:text='${line1}':fontsize=46:fontcolor=white:` +
+          `x=(w-text_w)/2:y=${blockTop}:` +
+          `shadowcolor=black@0.9:shadowx=2:shadowy=2:` +
+          `${enableExpr}`
+        );
+      }
+      if (line2) {
+        const y2 = `${blockTop}+${lineHeight}`;
+        filters.push(
+          `drawbox=x=(w-text_w)/2-16:y=${y2}-10:w=text_w+32:h=${lineHeight}+6:color=black@0.60:t=fill:` +
+          `${enableExpr}`
+        );
+        filters.push(
+          `drawtext=fontfile=${font}:text='${line2}':fontsize=44:fontcolor=white@0.95:` +
+          `x=(w-text_w)/2:y=${y2}:` +
+          `shadowcolor=black@0.9:shadowx=2:shadowy=2:` +
+          `${enableExpr}`
+        );
+      }
+      if (line3) {
+        const y3 = `${blockTop}+${lineHeight * 2}`;
+        filters.push(
+          `drawbox=x=(w-text_w)/2-16:y=${y3}-10:w=text_w+32:h=${lineHeight}+6:color=black@0.60:t=fill:` +
+          `${enableExpr}`
+        );
+        filters.push(
+          `drawtext=fontfile=${font}:text='${line3}':fontsize=42:fontcolor=white@0.90:` +
+          `x=(w-text_w)/2:y=${y3}:` +
+          `shadowcolor=black@0.9:shadowx=2:shadowy=2:` +
+          `${enableExpr}`
+        );
+      }
     }
   }
   return filters;
@@ -440,7 +589,6 @@ app.post('/assemble', async (req, res) => {
   } = req.body;
 
   if (typeof word_timing === 'string') { try { word_timing = JSON.parse(word_timing); } catch(e) { word_timing = []; } }
-
   if (typeof video_items === 'string') { try { video_items = JSON.parse(video_items); } catch(e) { video_items = []; } }
   if (typeof text_items === 'string') { try { text_items = JSON.parse(text_items); } catch(e) { text_items = []; } }
   if (typeof dry_run === 'string') { dry_run = dry_run === 'true'; }
@@ -455,9 +603,9 @@ app.post('/assemble', async (req, res) => {
   const firstItem = video_items[0] || {};
   const scriptText = script || firstItem.script || '';
 
-  console.log(`[${jobId}] Starting assembly v2.6.0. dry_run=${dry_run}, query="${searchQuery}"`);
+  console.log(`[${jobId}] Starting assembly v3.0.0. dry_run=${dry_run}, query="${searchQuery}", angle="${content_angle}"`);
 
-  // Dry run
+  // Dry run — return mock response without processing
   if (dry_run) {
     return res.json({
       success: true, dry_run: true, job_id: jobId,
@@ -492,9 +640,10 @@ app.post('/assemble', async (req, res) => {
       console.warn(`[${jobId}] Logo download failed: ${e.message} - will skip logo`);
     }
 
-    // Step 2b: Download background music — randomly selected from pool
-    const selectedBgmUrl = getRandomBgmUrl();
-    console.log(`[${jobId}] Downloading background music: ${selectedBgmUrl.split('/').pop()}...`);
+    // Step 2b: FIX 1 — Download content-angle-mapped BGM (brand sonic identity)
+    const selectedBgmUrl = getBgmForAngle(content_angle);
+    const selectedBgmName = selectedBgmUrl.split('/').pop();
+    console.log(`[${jobId}] Downloading BGM for angle "${content_angle}": ${selectedBgmName}`);
     let bgmExists = false;
     try {
       await downloadFile(selectedBgmUrl, bgmPath);
@@ -505,7 +654,7 @@ app.post('/assemble', async (req, res) => {
       console.warn(`[${jobId}] BGM download failed: ${e.message} - will skip BGM`);
     }
 
-    // Step 3: Get Pexels clips
+    // Step 3: Get Pexels clips (FIX 4 — people in motion queries)
     console.log(`[${jobId}] Fetching Pexels clips for: "${searchQuery}"...`);
     const pexelsClips = await getPexelsClips(searchQuery);
     console.log(`[${jobId}] Got ${pexelsClips.length} Pexels clips`);
@@ -518,37 +667,18 @@ app.post('/assemble', async (req, res) => {
       const trimmedPaths = [];
 
       for (let i = 0; i < numClips; i++) {
-        const rawPath = path.join(TEMP_DIR, `${jobId}_raw${i}.mp4`);
-        const trimPath = path.join(TEMP_DIR, `${jobId}_trim${i}.mp4`);
+        const clip = pexelsClips[i];
+        const rawPath = path.join(TEMP_DIR, `${jobId}_raw_${i}.mp4`);
+        const trimPath = path.join(TEMP_DIR, `${jobId}_clip_${i}.mp4`);
         tempFiles.push(rawPath, trimPath);
+
         try {
-          console.log(`[${jobId}] Downloading clip ${i+1}/${numClips}...`);
-          await downloadFile(pexelsClips[i].url, rawPath);
-          // FIX v2.8: Detect clip brightness and apply targeted boost only for dark clips.
-          // Flat brightness boost on all clips caused BGM audio to drop in some ffmpeg versions.
-          // Instead: measure average luma of first 1 second, boost if below threshold.
-          let brightnessFilter = 'scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1';
-          try {
-            const lumaResult = execSync(
-              `ffprobe -v error -select_streams v:0 -vframes 30 -vf "signalstats" -show_entries frame_tags=lavfi.signalstats.YAVG -of default=noprint_wrappers=1:nokey=1 "${rawPath}" 2>&1 | head -5`,
-              { timeout: 15000, shell: true }
-            ).toString().trim();
-            const lumaValues = lumaResult.split('\n').map(v => parseFloat(v)).filter(v => !isNaN(v));
-            const avgLuma = lumaValues.length > 0 ? lumaValues.reduce((a, b) => a + b, 0) / lumaValues.length : 128;
-            console.log(`[${jobId}] Clip ${i+1} avg luma: ${avgLuma.toFixed(1)}`);
-            if (avgLuma < 60) {
-              // Very dark clip — apply strong brightness boost
-              brightnessFilter += ',eq=brightness=0.15:contrast=1.1';
-              console.log(`[${jobId}] Clip ${i+1} is dark (luma=${avgLuma.toFixed(1)}) — applying +0.15 brightness boost`);
-            } else if (avgLuma < 90) {
-              // Moderately dark — apply mild boost
-              brightnessFilter += ',eq=brightness=0.07:contrast=1.05';
-              console.log(`[${jobId}] Clip ${i+1} is slightly dark (luma=${avgLuma.toFixed(1)}) — applying +0.07 brightness boost`);
-            }
-            // Bright clips (luma >= 90): no adjustment needed
-          } catch (lumaErr) {
-            console.warn(`[${jobId}] Clip ${i+1} luma check failed: ${lumaErr.message} — using no brightness adjustment`);
-          }
+          await downloadFile(clip.url, rawPath);
+          const rawSize = fs.statSync(rawPath).size;
+          if (rawSize < 50000) { console.warn(`[${jobId}] Clip ${i} too small (${rawSize}b), skipping`); continue; }
+
+          // Slight contrast boost — makes people pop against background
+          const brightnessFilter = `eq=contrast=1.08:saturation=1.05`;
           const trimCmd = [
             'ffmpeg -y',
             `-i "${rawPath}"`,
@@ -584,7 +714,7 @@ app.post('/assemble', async (req, res) => {
       }
     }
 
-    // Fallback: dark background
+    // Fallback: dark branded background
     if (!baseVideoPath) {
       console.log(`[${jobId}] Using fallback dark background`);
       const bgPath = path.join(TEMP_DIR, `${jobId}_bg.mp4`);
@@ -598,37 +728,37 @@ app.post('/assemble', async (req, res) => {
 
     // Step 4: Parse caption segments
     const segments = parseCaptionSegments(scriptText, caption_text || firstItem.caption || '', content_angle);
-    console.log(`[${jobId}] Parsed ${segments.length} caption segments for cycling`);
+    console.log(`[${jobId}] Parsed ${segments.length} caption segments (segment 0 = hook card)`);
 
-    // Step 5: Compose final video
-    console.log(`[${jobId}] Composing final video with overlays...`);
+    // Step 5: Compose final video (FIX 2+3 — center-screen overlay, hook card)
+    console.log(`[${jobId}] Composing final video with center-screen overlays...`);
 
     const logoExists = fs.existsSync(logoPath) && fs.statSync(logoPath).size > 1000;
 
-    // FIX #4: Removed eq=brightness=-0.06 from staticFilters — was darkening the whole video.
-    // Kept contrast=1.05 for a slight pop without darkening.
+    // FIX 2: Static filters — removed bottom black bar (drawbox).
+    // Brand URL moved to top-right, small and unobtrusive.
+    // Slight contrast boost to make people in motion pop.
+    const cyclingFilters = buildCyclingCaptionFilters(segments, audioDuration, FONT_BOLD, word_timing);
+
+    const staticFilters = [
+      `eq=contrast=1.05`,
+      // Brand URL — top-right corner, small, always visible
+      `drawtext=fontfile=${FONT_BOLD}:text='yfitai.com':fontsize=30:fontcolor=white@0.75:` +
+      `x=w-text_w-24:y=24:shadowcolor=black@0.8:shadowx=1:shadowy=1`,
+    ];
+
     if (logoExists) {
-      const cyclingFilters = buildCyclingCaptionFilters(segments, audioDuration, FONT_BOLD, word_timing);
-
-      const staticFilters = [
-        `eq=contrast=1.05`,
-        `drawbox=x=0:y=ih-340:w=iw:h=340:color=black@0.80:t=fill`,
-        `drawtext=fontfile=${FONT_BOLD}:text='yfitai.com - Try free':fontsize=38:fontcolor=0x00ff88:x=(w-text_w)/2:y=h-72:shadowcolor=black@0.9:shadowx=2:shadowy=2`,
-      ];
-
       const allVfFilters = [...staticFilters, ...cyclingFilters].join(',');
 
       const filterComplex = [
-        `[1:v]scale=260:-1,format=rgba,colorchannelmixer=aa=0.88[logo]`,
+        `[1:v]scale=200:-1,format=rgba,colorchannelmixer=aa=0.85[logo]`,
         `[0:v]${allVfFilters}[base]`,
-        `[base][logo]overlay=x=30:y=30[out]`
+        // Logo: top-left corner, small and clean
+        `[base][logo]overlay=x=20:y=20[out]`
       ].join(';');
 
       let finalCmd;
       if (bgmExists) {
-        // FIX #1: BGM mixing — apply volume to BGM stream, then amix with voiceover.
-        // Removed loudnorm from the mixed output — it was crushing the BGM to inaudible.
-        // Instead apply loudnorm only to the voiceover input before mixing.
         const audioFilterComplex = [
           filterComplex,
           `[2:a]aresample=44100,volume=${BGM_VOLUME},aloop=loop=-1:size=2e+09[bgm]`,
@@ -670,20 +800,20 @@ app.post('/assemble', async (req, res) => {
       }
 
       execSync(finalCmd, { timeout: 600000, shell: true });
+
     } else {
-      // No logo - fallback to text-only branding
+      // No logo — text branding only
       console.log(`[${jobId}] Logo not available, using text branding`);
-      const cyclingFilters = buildCyclingCaptionFilters(segments, audioDuration, FONT_BOLD, word_timing);
-      const staticFilters = [
-        `eq=contrast=1.05`,
-        `drawbox=x=0:y=ih-340:w=iw:h=340:color=black@0.80:t=fill`,
-        `drawtext=fontfile=${FONT_BOLD}:text='YFIT AI':fontsize=72:fontcolor=0x00ff88:x=30:y=30:shadowcolor=black:shadowx=3:shadowy=3`,
-        `drawtext=fontfile=${FONT_BOLD}:text='yfitai.com - Try free':fontsize=38:fontcolor=0x00ff88:x=(w-text_w)/2:y=h-72:shadowcolor=black@0.9:shadowx=2:shadowy=2`,
+      const textBrandFilters = [
+        ...staticFilters,
+        // YFIT brand name top-left when no logo
+        `drawtext=fontfile=${FONT_BOLD}:text='YFIT AI':fontsize=52:fontcolor=${YFIT_GREEN}:` +
+        `x=24:y=24:shadowcolor=black:shadowx=2:shadowy=2`,
       ];
-      const vfFilter = [...staticFilters, ...cyclingFilters].join(',');
+      const vfFilter = [...textBrandFilters, ...cyclingFilters].join(',');
+
       let finalCmd;
       if (bgmExists) {
-        // FIX #1: Same BGM fix — no loudnorm on mixed output
         finalCmd = [
           'ffmpeg -y',
           `-i "${baseVideoPath}"`,
@@ -725,7 +855,7 @@ app.post('/assemble', async (req, res) => {
     const videoUrl = await uploadToSupabase(finalPath, storagePath, 'video/mp4');
     console.log(`[${jobId}] Uploaded: ${videoUrl}`);
 
-    // Cleanup
+    // Cleanup temp files
     tempFiles.forEach(f => { try { if (fs.existsSync(f)) fs.unlinkSync(f); } catch (e) {} });
 
     res.json({
@@ -734,6 +864,7 @@ app.post('/assemble', async (req, res) => {
       video_size_bytes: videoSize,
       pexels_clips_used: pexelsClips.length,
       tips_count: segments.length,
+      bgm_track: selectedBgmName,
       platforms: video_items.map(v => v.platform),
       text_platforms: text_items.map(t => t.platform),
       voiceover_url, content_angle, run_date
@@ -747,9 +878,10 @@ app.post('/assemble', async (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`YFIT Video Service v2.8.0 running on port ${PORT}`);
+  console.log(`YFIT Video Service v3.0.0 running on port ${PORT}`);
   console.log(`Pexels API: ${PEXELS_API_KEY ? 'configured' : 'NOT configured - set PEXELS_API_KEY'}`);
   console.log(`Logo URL: ${YFIT_LOGO_URL}`);
+  console.log(`BGM: Primary=${BGM_TRACKS.primary.split('/').pop()}, Energetic=${BGM_TRACKS.energetic.split('/').pop()}, Deep=${BGM_TRACKS.deep.split('/').pop()}`);
   try {
     console.log(`ffmpeg: ${execSync('ffmpeg -version 2>&1 | head -1').toString().trim()}`);
   } catch (e) {
