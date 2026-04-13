@@ -1,6 +1,6 @@
 'use strict';
 // ============================================================
-// YFIT Video Service v3.1.2
+// YFIT Video Service v3.1.3
 // ============================================================
 // CHANGES vs v2.8.0:
 //
@@ -105,7 +105,7 @@ app.get('/health', (req, res) => {
     status: 'ok',
     ffmpeg: ffmpegVersion,
     pexels: PEXELS_API_KEY ? 'configured' : 'missing',
-    version: '3.1.2',
+    version: '3.1.3',
     timestamp: new Date().toISOString()
   });
 });
@@ -800,74 +800,72 @@ app.post('/assemble', async (req, res) => {
 
     const logoExists = fs.existsSync(logoPath) && fs.statSync(logoPath).size > 1000;
 
-    // FIX 2: Static filters — removed bottom black bar (drawbox).
-    // Brand URL moved to top-right, small and unobtrusive.
-    // Slight contrast boost to make people in motion pop.
+    // v3.1.3: Logo PNG top-left + yfitai.com text top-right. ZERO black bars anywhere.
+    // No drawbox calls for watermarks — pure transparent PNG overlay + text shadow only.
     const cyclingFilters = buildCyclingCaptionFilters(segments, audioDuration, FONT_BOLD, word_timing);
 
-    // End card: last 3 seconds of every video — large yfitai.com on screen
-    // This fires regardless of what the script says, ensuring the URL is always visible
+    // End card: last 3 seconds — text only, no drawbox backgrounds
     const endCardStart = Math.max(0, audioDuration - 3.0);
     const endCardEnable = `enable='between(t,${endCardStart.toFixed(2)},${audioDuration.toFixed(2)})'`;
 
-    const staticFilters = [
+    // Static vf filters: contrast boost + yfitai.com top-right + end card text
+    // NO drawbox calls — zero black bars added by us
+    const staticVfFilters = [
       `eq=contrast=1.05`,
-      // Brand URL — YFIT green for brand recognition, top-right corner (always visible)
-      `drawtext=fontfile=${FONT_BOLD}:text='yfitai.com':fontsize=30:fontcolor=${YFIT_GREEN}@0.90:` +
-      `x=w-text_w-24:y=100:shadowcolor=black@0.9:shadowx=1:shadowy=1`,
-      // End card: "Try YFIT AI Free" above, large yfitai.com below — centered block
-      // Total block height: 52px label + 12px gap + 76px URL = 140px
-      // Center block at h/2 - 70 so the whole block is vertically centered
-      `drawbox=x=(w-500)/2:y=(h/2)-78:w=500:h=56:color=black@0.75:t=fill:${endCardEnable}`,
-      `drawtext=fontfile=${FONT_BOLD}:text='Try YFIT AI Free':fontsize=40:fontcolor=white@0.95:x=(w-text_w)/2:y=(h/2)-70:shadowcolor=black@0.9:shadowx=1:shadowy=1:${endCardEnable}`,
-      `drawbox=x=(w-640)/2:y=(h/2)-10:w=640:h=80:color=black@0.80:t=fill:${endCardEnable}`,
-      `drawtext=fontfile=${FONT_BOLD}:text='yfitai.com':fontsize=64:fontcolor=${YFIT_GREEN}:x=(w-text_w)/2:y=(h/2)-2:shadowcolor=black@0.9:shadowx=2:shadowy=2:${endCardEnable}`,
+      // yfitai.com — top-right, YFIT green, small shadow for readability on any bg
+      `drawtext=fontfile=${FONT_BOLD}:text='yfitai.com':fontsize=30:fontcolor=${YFIT_GREEN}@0.95:` +
+      `x=w-text_w-24:y=28:shadowcolor=black@0.85:shadowx=2:shadowy=2`,
+      // End card text only — no background boxes
+      `drawtext=fontfile=${FONT_BOLD}:text='Try YFIT AI Free':fontsize=40:fontcolor=white@0.95:x=(w-text_w)/2:y=(h/2)-70:shadowcolor=black@0.9:shadowx=2:shadowy=2:${endCardEnable}`,
+      `drawtext=fontfile=${FONT_BOLD}:text='yfitai.com':fontsize=64:fontcolor=${YFIT_GREEN}:x=(w-text_w)/2:y=(h/2)-2:shadowcolor=black@0.9:shadowx=3:shadowy=3:${endCardEnable}`,
     ];
 
-    // v3.1.1: PNG logo overlay removed — it caused a dark banner on all clips due to
-    // semi-transparent pixels in the PNG darkening the overlay bounding box.
-    // Using text-only YFIT AI watermark (YFIT green, bold, black shadow) which is clean
-    // on any background. PNG logo can be re-added later with a pre-composited opaque circle.
-    console.log(`[${jobId}] Composing final video (text watermark)...`);
-    const textBrandFilters = [
-      ...staticFilters,
-      // YFIT AI brand watermark — top-left, YFIT green, always visible on any background
-      `drawtext=fontfile=${FONT_BOLD}:text='YFIT AI':fontsize=48:fontcolor=${YFIT_GREEN}:` +
-      `x=24:y=100:shadowcolor=black@0.95:shadowx=2:shadowy=2`,
-    ];
-    const vfFilter = [...textBrandFilters, ...cyclingFilters].join(',');
+    const vfOnlyFilters = [...staticVfFilters, ...cyclingFilters].join(',');
+
+    console.log(`[${jobId}] Composing final video (logo=${logoExists ? 'PNG' : 'text fallback'})...`);
 
     let finalCmd;
-    if (bgmExists) {
-      finalCmd = [
-        'ffmpeg -y',
-        `-i "${baseVideoPath}"`,
-        `-i "${bgmPath}"`,
-        `-i "${audioPath}"`,
-        `-filter_complex "[1:a]aresample=44100,volume=${BGM_VOLUME},aloop=loop=-1:size=2e+09[bgm];[2:a]aresample=44100,loudnorm=I=-16:TP=-1.5:LRA=11[voice];[voice][bgm]amix=inputs=2:duration=first:dropout_transition=3[aout]"`,
-        `-map 0:v`,
-        `-map "[aout]"`,
-        `-vf "${vfFilter}"`,
-        `-c:v libx264 -preset fast -crf 22`,
-        `-c:a aac -b:a 192k`,
-        `-pix_fmt yuv420p`,
-        `-shortest`,
-        `-movflags +faststart`,
-        `"${finalPath}"`
-      ].join(' ');
+    if (logoExists) {
+      // Logo overlay via filter_complex: scale to 80px, use rgba to preserve transparency
+      // overlay=x=20:y=20 places it top-left with no background box
+      if (bgmExists) {
+        const fc = `[0:v]${vfOnlyFilters}[vbase];[1:v]scale=80:-1,format=rgba[logo];[vbase][logo]overlay=x=20:y=20[vout];[2:a]aresample=44100,volume=${BGM_VOLUME},aloop=loop=-1:size=2e+09[bgm];[3:a]aresample=44100,loudnorm=I=-16:TP=-1.5:LRA=11[voice];[voice][bgm]amix=inputs=2:duration=first:dropout_transition=3[aout]`;
+        finalCmd = `ffmpeg -y -i "${baseVideoPath}" -i "${logoPath}" -i "${bgmPath}" -i "${audioPath}" -filter_complex "${fc}" -map "[vout]" -map "[aout]" -c:v libx264 -preset fast -crf 22 -c:a aac -b:a 192k -pix_fmt yuv420p -shortest -movflags +faststart "${finalPath}"`;
+      } else {
+        const fc = `[0:v]${vfOnlyFilters}[vbase];[1:v]scale=80:-1,format=rgba[logo];[vbase][logo]overlay=x=20:y=20[vout];[2:a]aresample=44100,loudnorm=I=-16:TP=-1.5:LRA=11[aout]`;
+        finalCmd = `ffmpeg -y -i "${baseVideoPath}" -i "${logoPath}" -i "${audioPath}" -filter_complex "${fc}" -map "[vout]" -map "[aout]" -c:v libx264 -preset fast -crf 22 -c:a aac -b:a 192k -pix_fmt yuv420p -shortest -movflags +faststart "${finalPath}"`;
+      }
     } else {
-      finalCmd = [
-        'ffmpeg -y',
-        `-i "${baseVideoPath}"`,
-        `-i "${audioPath}"`,
-        `-vf "${vfFilter}"`,
-        `-c:v libx264 -preset fast -crf 22`,
-        `-c:a aac -b:a 192k -af "loudnorm=I=-16:TP=-1.5:LRA=11"`,
-        `-pix_fmt yuv420p`,
-        `-shortest`,
-        `-movflags +faststart`,
-        `"${finalPath}"`
-      ].join(' ');
+      // Fallback: text-only YFIT AI top-left if logo download failed
+      const fallbackVf = [
+        ...staticVfFilters,
+        `drawtext=fontfile=${FONT_BOLD}:text='YFIT AI':fontsize=36:fontcolor=${YFIT_GREEN}@0.95:x=20:y=20:shadowcolor=black@0.85:shadowx=2:shadowy=2`,
+        ...cyclingFilters
+      ].join(',');
+      if (bgmExists) {
+        finalCmd = [
+          'ffmpeg -y',
+          `-i "${baseVideoPath}"`,
+          `-i "${bgmPath}"`,
+          `-i "${audioPath}"`,
+          `-filter_complex "[1:a]aresample=44100,volume=${BGM_VOLUME},aloop=loop=-1:size=2e+09[bgm];[2:a]aresample=44100,loudnorm=I=-16:TP=-1.5:LRA=11[voice];[voice][bgm]amix=inputs=2:duration=first:dropout_transition=3[aout]"`,
+          `-map 0:v -map "[aout]"`,
+          `-vf "${fallbackVf}"`,
+          `-c:v libx264 -preset fast -crf 22 -c:a aac -b:a 192k`,
+          `-pix_fmt yuv420p -shortest -movflags +faststart`,
+          `"${finalPath}"`
+        ].join(' ');
+      } else {
+        finalCmd = [
+          'ffmpeg -y',
+          `-i "${baseVideoPath}"`,
+          `-i "${audioPath}"`,
+          `-vf "${fallbackVf}"`,
+          `-c:v libx264 -preset fast -crf 22 -c:a aac -b:a 192k -af "loudnorm=I=-16:TP=-1.5:LRA=11"`,
+          `-pix_fmt yuv420p -shortest -movflags +faststart`,
+          `"${finalPath}"`
+        ].join(' ');
+      }
     }
     execSync(finalCmd, { timeout: 600000, shell: true });
 
