@@ -1,6 +1,6 @@
 'use strict';
 // ============================================================
-// YFIT Video Service v3.1.3
+// YFIT Video Service v3.1.4
 // ============================================================
 // CHANGES vs v2.8.0:
 //
@@ -105,7 +105,7 @@ app.get('/health', (req, res) => {
     status: 'ok',
     ffmpeg: ffmpegVersion,
     pexels: PEXELS_API_KEY ? 'configured' : 'missing',
-    version: '3.1.3',
+    version: '3.1.4',
     timestamp: new Date().toISOString()
   });
 });
@@ -739,10 +739,26 @@ app.post('/assemble', async (req, res) => {
           const rawSize = fs.statSync(rawPath).size;
           if (rawSize < 50000) { console.warn(`[${jobId}] Clip ${i} too small (${rawSize}b), skipping`); continue; }
 
+          // v3.1.4: Reject clips where the top 15% of the frame is predominantly dark.
+          // This eliminates gym ceiling shots, dark overhead lighting, etc.
+          // Uses ffprobe signalstats to get mean luma of the top crop region.
+          let topBrightness = 255; // default: assume bright (safe fallback)
+          try {
+            const probeResult = execSync(
+              `ffprobe -v error -select_streams v:0 -read_intervals "%+#1" -vf "crop=iw:ih*0.15:0:0,signalstats" -show_entries frame_tags=lavfi.signalstats.YAVG -of default=noprint_wrappers=1:nokey=1 "${rawPath}"`,
+              { timeout: 15000, shell: true }
+            ).toString().trim();
+            topBrightness = parseFloat(probeResult) || 255;
+          } catch (e) {
+            console.warn(`[${jobId}] Clip ${i} brightness probe failed: ${e.message}`);
+          }
+          if (topBrightness < 40) {
+            console.warn(`[${jobId}] Clip ${i} rejected: top brightness ${topBrightness.toFixed(1)} < 40 (dark ceiling)`);
+            continue;
+          }
+          console.log(`[${jobId}] Clip ${i} accepted: top brightness ${topBrightness.toFixed(1)}`);
+
           // Force portrait 1080x1920 crop + slight contrast boost
-          // This is critical: Pexels clips are landscape by default.
-          // scale=1080:1920:force_original_aspect_ratio=increase fills the frame,
-          // then crop=1080:1920 centre-crops to exact portrait dimensions.
           const portraitFilter = `scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1,eq=contrast=1.08:saturation=1.05`;
           const trimCmd = [
             'ffmpeg -y',
@@ -829,10 +845,10 @@ app.post('/assemble', async (req, res) => {
       // Logo overlay via filter_complex: scale to 80px, use rgba to preserve transparency
       // overlay=x=20:y=20 places it top-left with no background box
       if (bgmExists) {
-        const fc = `[0:v]${vfOnlyFilters}[vbase];[1:v]scale=80:-1,format=rgba[logo];[vbase][logo]overlay=x=20:y=20[vout];[2:a]aresample=44100,volume=${BGM_VOLUME},aloop=loop=-1:size=2e+09[bgm];[3:a]aresample=44100,loudnorm=I=-16:TP=-1.5:LRA=11[voice];[voice][bgm]amix=inputs=2:duration=first:dropout_transition=3[aout]`;
+        const fc = `[0:v]${vfOnlyFilters}[vbase];[1:v]scale=240:-1,format=rgba[logo];[vbase][logo]overlay=x=20:y=20[vout];[2:a]aresample=44100,volume=${BGM_VOLUME},aloop=loop=-1:size=2e+09[bgm];[3:a]aresample=44100,loudnorm=I=-16:TP=-1.5:LRA=11[voice];[voice][bgm]amix=inputs=2:duration=first:dropout_transition=3[aout]`;
         finalCmd = `ffmpeg -y -i "${baseVideoPath}" -i "${logoPath}" -i "${bgmPath}" -i "${audioPath}" -filter_complex "${fc}" -map "[vout]" -map "[aout]" -c:v libx264 -preset fast -crf 22 -c:a aac -b:a 192k -pix_fmt yuv420p -shortest -movflags +faststart "${finalPath}"`;
       } else {
-        const fc = `[0:v]${vfOnlyFilters}[vbase];[1:v]scale=80:-1,format=rgba[logo];[vbase][logo]overlay=x=20:y=20[vout];[2:a]aresample=44100,loudnorm=I=-16:TP=-1.5:LRA=11[aout]`;
+        const fc = `[0:v]${vfOnlyFilters}[vbase];[1:v]scale=240:-1,format=rgba[logo];[vbase][logo]overlay=x=20:y=20[vout];[2:a]aresample=44100,loudnorm=I=-16:TP=-1.5:LRA=11[aout]`;
         finalCmd = `ffmpeg -y -i "${baseVideoPath}" -i "${logoPath}" -i "${audioPath}" -filter_complex "${fc}" -map "[vout]" -map "[aout]" -c:v libx264 -preset fast -crf 22 -c:a aac -b:a 192k -pix_fmt yuv420p -shortest -movflags +faststart "${finalPath}"`;
       }
     } else {
