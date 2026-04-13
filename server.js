@@ -51,8 +51,8 @@ const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY;
 const API_SECRET = process.env.API_SECRET || 'yfit-video-secret-2026';
 const PEXELS_API_KEY = process.env.PEXELS_API_KEY;
 
-// YFIT logo hosted on Supabase (transparent background PNG)
-const YFIT_LOGO_URL = `${SUPABASE_URL}/storage/v1/object/public/yfit-videos/assets/yfit-logo-transparent.png`;
+// YFIT circular watermark — Y+wings icon, fully transparent background, no box/banner
+const YFIT_LOGO_URL = 'https://files.manuscdn.com/user_upload_by_module/session_file/310519663099417101/iwWwgxCMQmlzrmTK.png';
 
 // ─── FIX 1: BRAND MUSIC — Sonic Identity ─────────────────────────────────────
 // YFIT uses a consistent signature track per content angle rather than random
@@ -105,7 +105,7 @@ app.get('/health', (req, res) => {
     status: 'ok',
     ffmpeg: ffmpegVersion,
     pexels: PEXELS_API_KEY ? 'configured' : 'missing',
-    version: '3.0.8',
+    version: '3.0.9',
     timestamp: new Date().toISOString()
   });
 });
@@ -828,11 +828,12 @@ app.post('/assemble', async (req, res) => {
       const allVfFilters = [...staticFilters, ...cyclingFilters].join(',');
 
       const filterComplex = [
-        // Crop logo to just the Y+wings icon (left 65% of the 1144x388 logo = 743px wide)
-      // This removes the 'FIT' text and gives a compact icon watermark in the top-left corner
-      `[1:v]crop=743:388:0:0,scale=120:-1,format=rgba,colorchannelmixer=aa=0.55[logo]`,
+        // Circular watermark: already cropped to Y+wings icon with transparent background
+        // scale=100:-1 keeps aspect ratio, format=rgba preserves transparency
+        // No colorchannelmixer needed — PNG alpha channel handles transparency
+        `[1:v]scale=100:-1,format=rgba[logo]`,
         `[0:v]${allVfFilters}[base]`,
-        // Logo: top-left corner, small and clean
+        // Logo: top-left corner, clean transparent overlay
         `[base][logo]overlay=x=20:y=20[out]`
       ].join(';');
 
