@@ -54,7 +54,7 @@ const PEXELS_API_KEY = process.env.PEXELS_API_KEY;
 // YFIT circular watermark — Y+wings icon, fully transparent background, no box/banner
 // v3.1.6: Use tight-cropped logo (149x81px) to eliminate black bounding-box artifact
 // Original 200x200 PNG had 64px transparent rows at top causing a black box in FFmpeg overlay
-const YFIT_LOGO_URL = 'https://d2xsxph8kpxj0f.cloudfront.net/310519663099417101/8TNedJULyoVCPDLa6UYde3/yfit_logo_tight_fe18c039.png';
+const YFIT_LOGO_URL = 'https://d2xsxph8kpxj0f.cloudfront.net/310519663099417101/8TNedJULyoVCPDLa6UYde3/yfit_logo_new_e83060df.png';
 
 // ─── FIX 1: BRAND MUSIC — Sonic Identity ─────────────────────────────────────
 // YFIT uses a consistent signature track per content angle rather than random
@@ -107,7 +107,7 @@ app.get('/health', (req, res) => {
     status: 'ok',
     ffmpeg: ffmpegVersion,
     pexels: PEXELS_API_KEY ? 'configured' : 'missing',
-    version: '3.1.8',
+    version: '3.1.9',
     timestamp: new Date().toISOString()
   });
 });
@@ -515,39 +515,27 @@ function buildCyclingCaptionFilters(segments, audioDuration, font, wordTiming) {
       const hookBoxW = 740;
       if (line1) {
         filters.push(
-          `drawbox=x=(w-${hookBoxW})/2:y=${blockTop}-12:w=${hookBoxW}:h=${lineHeight}+8:color=black@0.65:t=fill:` +
-          `${enableExpr}`
-        );
-        filters.push(
           `drawtext=fontfile=${font}:text='${line1}':fontsize=56:fontcolor=white:` +
           `x=(w-text_w)/2:y=${blockTop}:` +
-          `shadowcolor=${YFIT_GREEN}@0.9:shadowx=0:shadowy=3:` +
+          `shadowcolor=black@0.9:shadowx=2:shadowy=2:` +
           `${enableExpr}`
         );
       }
       if (line2) {
         const y2 = `${blockTop}+${lineHeight}`;
         filters.push(
-          `drawbox=x=(w-${hookBoxW})/2:y=${y2}-12:w=${hookBoxW}:h=${lineHeight}+8:color=black@0.65:t=fill:` +
-          `${enableExpr}`
-        );
-        filters.push(
           `drawtext=fontfile=${font}:text='${line2}':fontsize=54:fontcolor=white@0.97:` +
           `x=(w-text_w)/2:y=${y2}:` +
-          `shadowcolor=${YFIT_GREEN}@0.7:shadowx=0:shadowy=2:` +
+          `shadowcolor=black@0.9:shadowx=2:shadowy=2:` +
           `${enableExpr}`
         );
       }
       if (line3) {
         const y3 = `${blockTop}+${lineHeight * 2}`;
         filters.push(
-          `drawbox=x=(w-${hookBoxW})/2:y=${y3}-12:w=${hookBoxW}:h=${lineHeight}+8:color=black@0.65:t=fill:` +
-          `${enableExpr}`
-        );
-        filters.push(
           `drawtext=fontfile=${font}:text='${line3}':fontsize=52:fontcolor=white@0.95:` +
           `x=(w-text_w)/2:y=${y3}:` +
-          `shadowcolor=${YFIT_GREEN}@0.6:shadowx=0:shadowy=2:` +
+          `shadowcolor=black@0.9:shadowx=2:shadowy=2:` +
           `${enableExpr}`
         );
       }
@@ -555,10 +543,6 @@ function buildCyclingCaptionFilters(segments, audioDuration, font, wordTiming) {
       // ── CTA END CARD: YFIT green text, bright pill, closing call-to-action ──
       const ctaBoxW = 700;
       if (line1) {
-        filters.push(
-          `drawbox=x=(w-${ctaBoxW})/2:y=${blockTop}-12:w=${ctaBoxW}:h=${lineHeight}+8:color=black@0.80:t=fill:` +
-          `${enableExpr}`
-        );
         filters.push(
           `drawtext=fontfile=${font}:text='${line1}':fontsize=50:fontcolor=${YFIT_GREEN}:` +
           `x=(w-text_w)/2:y=${blockTop}:` +
@@ -569,10 +553,6 @@ function buildCyclingCaptionFilters(segments, audioDuration, font, wordTiming) {
       if (line2) {
         const y2 = `${blockTop}+${lineHeight}`;
         filters.push(
-          `drawbox=x=(w-${ctaBoxW})/2:y=${y2}-12:w=${ctaBoxW}:h=${lineHeight}+8:color=black@0.80:t=fill:` +
-          `${enableExpr}`
-        );
-        filters.push(
           `drawtext=fontfile=${font}:text='${line2}':fontsize=48:fontcolor=${YFIT_GREEN}@0.95:` +
           `x=(w-text_w)/2:y=${y2}:` +
           `shadowcolor=black@0.9:shadowx=2:shadowy=2:` +
@@ -581,10 +561,6 @@ function buildCyclingCaptionFilters(segments, audioDuration, font, wordTiming) {
       }
       if (line3) {
         const y3 = `${blockTop}+${lineHeight * 2}`;
-        filters.push(
-          `drawbox=x=(w-${ctaBoxW})/2:y=${y3}-12:w=${ctaBoxW}:h=${lineHeight}+8:color=black@0.80:t=fill:` +
-          `${enableExpr}`
-        );
         filters.push(
           `drawtext=fontfile=${font}:text='${line3}':fontsize=46:fontcolor=${YFIT_GREEN}@0.90:` +
           `x=(w-text_w)/2:y=${y3}:` +
@@ -598,10 +574,6 @@ function buildCyclingCaptionFilters(segments, audioDuration, font, wordTiming) {
       const bodyBoxW = 620;
       if (line1) {
         filters.push(
-          `drawbox=x=(w-${bodyBoxW})/2:y=${blockTop}-10:w=${bodyBoxW}:h=${lineHeight}+6:color=black@0.60:t=fill:` +
-          `${enableExpr}`
-        );
-        filters.push(
           `drawtext=fontfile=${font}:text='${line1}':fontsize=46:fontcolor=white:` +
           `x=(w-text_w)/2:y=${blockTop}:` +
           `shadowcolor=black@0.9:shadowx=2:shadowy=2:` +
@@ -611,10 +583,6 @@ function buildCyclingCaptionFilters(segments, audioDuration, font, wordTiming) {
       if (line2) {
         const y2 = `${blockTop}+${lineHeight}`;
         filters.push(
-          `drawbox=x=(w-${bodyBoxW})/2:y=${y2}-10:w=${bodyBoxW}:h=${lineHeight}+6:color=black@0.60:t=fill:` +
-          `${enableExpr}`
-        );
-        filters.push(
           `drawtext=fontfile=${font}:text='${line2}':fontsize=44:fontcolor=white@0.95:` +
           `x=(w-text_w)/2:y=${y2}:` +
           `shadowcolor=black@0.9:shadowx=2:shadowy=2:` +
@@ -623,10 +591,6 @@ function buildCyclingCaptionFilters(segments, audioDuration, font, wordTiming) {
       }
       if (line3) {
         const y3 = `${blockTop}+${lineHeight * 2}`;
-        filters.push(
-          `drawbox=x=(w-${bodyBoxW})/2:y=${y3}-10:w=${bodyBoxW}:h=${lineHeight}+6:color=black@0.60:t=fill:` +
-          `${enableExpr}`
-        );
         filters.push(
           `drawtext=fontfile=${font}:text='${line3}':fontsize=42:fontcolor=white@0.90:` +
           `x=(w-text_w)/2:y=${y3}:` +
@@ -830,9 +794,9 @@ app.post('/assemble', async (req, res) => {
     // NO drawbox calls — zero black bars added by us
     const staticVfFilters = [
       `eq=contrast=1.05`,
-      // yfitai.com — top-LEFT, YFIT green, small shadow for readability on any bg
+      // yfitai.com — top-RIGHT, YFIT green, shadow only (no box)
       `drawtext=fontfile=${FONT_BOLD}:text='yfitai.com':fontsize=30:fontcolor=${YFIT_GREEN}@0.95:` +
-      `x=24:y=28:shadowcolor=black@0.85:shadowx=2:shadowy=2`,
+      `x=w-text_w-24:y=28:shadowcolor=black@0.85:shadowx=2:shadowy=2`,
       // End card text only — no background boxes
       `drawtext=fontfile=${FONT_BOLD}:text='Try YFIT AI Free':fontsize=40:fontcolor=white@0.95:x=(w-text_w)/2:y=(h/2)-70:shadowcolor=black@0.9:shadowx=2:shadowy=2:${endCardEnable}`,
       `drawtext=fontfile=${FONT_BOLD}:text='yfitai.com':fontsize=64:fontcolor=${YFIT_GREEN}:x=(w-text_w)/2:y=(h/2)-2:shadowcolor=black@0.9:shadowx=3:shadowy=3:${endCardEnable}`,
@@ -845,12 +809,12 @@ app.post('/assemble', async (req, res) => {
     let finalCmd;
     if (logoExists) {
       // Logo overlay via filter_complex: scale to 240px wide, use rgba to preserve transparency
-      // overlay=x=w-overlay_w-20:y=10 places it top-RIGHT with no background box
+      // overlay=x=20:y=10 places it top-LEFT with no background box
       if (bgmExists) {
-        const fc = `[0:v]${vfOnlyFilters}[vbase];[1:v]scale=240:-1,format=rgba,premultiply[logo];[vbase][logo]overlay=x=W-w-20:y=10:format=auto[vout];[2:a]aresample=44100,volume=${BGM_VOLUME},aloop=loop=-1:size=2e+09[bgm];[3:a]aresample=44100,loudnorm=I=-16:TP=-1.5:LRA=11[voice];[voice][bgm]amix=inputs=2:duration=first:dropout_transition=3[aout]`;
+        const fc = `[0:v]${vfOnlyFilters}[vbase];[1:v]scale=240:-1,format=rgba,premultiply[logo];[vbase][logo]overlay=x=20:y=10:format=auto[vout];[2:a]aresample=44100,volume=${BGM_VOLUME},aloop=loop=-1:size=2e+09[bgm];[3:a]aresample=44100,loudnorm=I=-16:TP=-1.5:LRA=11[voice];[voice][bgm]amix=inputs=2:duration=first:dropout_transition=3[aout]`;
         finalCmd = `ffmpeg -y -i "${baseVideoPath}" -i "${logoPath}" -i "${bgmPath}" -i "${audioPath}" -filter_complex "${fc}" -map "[vout]" -map "[aout]" -c:v libx264 -preset fast -crf 22 -c:a aac -b:a 192k -pix_fmt yuv420p -shortest -movflags +faststart "${finalPath}"`;
       } else {
-        const fc = `[0:v]${vfOnlyFilters}[vbase];[1:v]scale=240:-1,format=rgba,premultiply[logo];[vbase][logo]overlay=x=W-w-20:y=10:format=auto[vout];[2:a]aresample=44100,loudnorm=I=-16:TP=-1.5:LRA=11[aout]`;
+        const fc = `[0:v]${vfOnlyFilters}[vbase];[1:v]scale=240:-1,format=rgba,premultiply[logo];[vbase][logo]overlay=x=20:y=10:format=auto[vout];[2:a]aresample=44100,loudnorm=I=-16:TP=-1.5:LRA=11[aout]`;
         finalCmd = `ffmpeg -y -i "${baseVideoPath}" -i "${logoPath}" -i "${audioPath}" -filter_complex "${fc}" -map "[vout]" -map "[aout]" -c:v libx264 -preset fast -crf 22 -c:a aac -b:a 192k -pix_fmt yuv420p -shortest -movflags +faststart "${finalPath}"`;
       }
     } else {
