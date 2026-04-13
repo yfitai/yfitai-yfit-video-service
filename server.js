@@ -82,8 +82,9 @@ function getBgmForAngle(contentAngle) {
   return BGM_TRACKS.primary;
 }
 
-// BGM at 45% — present and energising without competing with the voiceover
-const BGM_VOLUME = 0.45;
+// BGM at 12% — subtle presence, industry standard for background music under voiceover.
+// 45% was too loud and sounded like a hum competing with the voice.
+const BGM_VOLUME = 0.12;
 
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -104,7 +105,7 @@ app.get('/health', (req, res) => {
     status: 'ok',
     ffmpeg: ffmpegVersion,
     pexels: PEXELS_API_KEY ? 'configured' : 'missing',
-    version: '3.0.1',
+    version: '3.0.2',
     timestamp: new Date().toISOString()
   });
 });
@@ -683,13 +684,16 @@ app.post('/assemble', async (req, res) => {
           const rawSize = fs.statSync(rawPath).size;
           if (rawSize < 50000) { console.warn(`[${jobId}] Clip ${i} too small (${rawSize}b), skipping`); continue; }
 
-          // Slight contrast boost — makes people pop against background
-          const brightnessFilter = `eq=contrast=1.08:saturation=1.05`;
+          // Force portrait 1080x1920 crop + slight contrast boost
+          // This is critical: Pexels clips are landscape by default.
+          // scale=1080:1920:force_original_aspect_ratio=increase fills the frame,
+          // then crop=1080:1920 centre-crops to exact portrait dimensions.
+          const portraitFilter = `scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1,eq=contrast=1.08:saturation=1.05`;
           const trimCmd = [
             'ffmpeg -y',
             `-i "${rawPath}"`,
             `-t ${clipDuration.toFixed(2)}`,
-            `-vf "${brightnessFilter}"`,
+            `-vf "${portraitFilter}"`,
             `-c:v libx264 -preset fast -pix_fmt yuv420p -an -r 30`,
             `"${trimPath}"`
           ].join(' ');
@@ -757,7 +761,7 @@ app.post('/assemble', async (req, res) => {
       const allVfFilters = [...staticFilters, ...cyclingFilters].join(',');
 
       const filterComplex = [
-        `[1:v]scale=200:-1,format=rgba,colorchannelmixer=aa=0.85[logo]`,
+        `[1:v]scale=260:-1,format=rgba,colorchannelmixer=aa=0.88[logo]`,
         `[0:v]${allVfFilters}[base]`,
         // Logo: top-left corner, small and clean
         `[base][logo]overlay=x=20:y=20[out]`
