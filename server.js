@@ -1,6 +1,6 @@
 'use strict';
 // ============================================================
-// YFIT Video Service v3.1.7
+// YFIT Video Service v3.2.0
 // ============================================================
 // CHANGES vs v2.8.0:
 //
@@ -67,7 +67,7 @@ const YFIT_LOGO_URL = 'https://d2xsxph8kpxj0f.cloudfront.net/310519663099417101/
 // All three tracks are royalty-free and stored in Supabase.
 const BGM_TRACKS = {
   primary:    `${SUPABASE_URL}/storage/v1/object/public/yfit-voiceovers/assets/bgm_motivational.mp3`,
-  energetic:  `${SUPABASE_URL}/storage/v1/object/public/yfit-voiceovers/assets/bgm_energetic.mp3`,
+  energetic:  'https://d2xsxph8kpxj0f.cloudfront.net/310519663099417101/8TNedJULyoVCPDLa6UYde3/bgm_energetic_new_be4cae1c.mp3',
   deep:       `${SUPABASE_URL}/storage/v1/object/public/yfit-voiceovers/assets/bgm_deep.mp3`,
 };
 
@@ -718,14 +718,14 @@ app.post('/assemble', async (req, res) => {
           } catch (e) {
             console.warn(`[${jobId}] Clip ${i} brightness probe failed: ${e.message}`);
           }
-          if (topBrightness < 80) {
+          if (topBrightness < 60) {
             console.warn(`[${jobId}] Clip ${i} rejected: top brightness ${topBrightness.toFixed(1)} < 80 (dark ceiling)`);
             continue;
           }
           console.log(`[${jobId}] Clip ${i} accepted: top brightness ${topBrightness.toFixed(1)}`);
 
           // Force portrait 1080x1920 crop + slight contrast boost
-          const portraitFilter = `scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1,eq=contrast=1.08:saturation=1.05`;
+          const portraitFilter = `scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1,eq=brightness=0.08:contrast=1.12:saturation=1.1`;
           const trimCmd = [
             'ffmpeg -y',
             `-i "${rawPath}"`,
