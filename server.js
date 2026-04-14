@@ -1,6 +1,6 @@
 'use strict';
 // ============================================================
-// YFIT Video Service v3.3.0
+// YFIT Video Service v3.4.0
 // ============================================================
 // CHANGES vs v3.2.0:
 //
@@ -86,7 +86,7 @@ app.get('/health', (req, res) => {
     status: 'ok',
     ffmpeg: ffmpegVersion,
     pexels: PEXELS_API_KEY ? 'configured' : 'missing',
-    version: '3.3.0',
+    version: '3.4.0',
     timestamp: new Date().toISOString()
   });
 });
@@ -534,12 +534,30 @@ app.post('/assemble', async (req, res) => {
 
   const jobId = `${run_date || 'test'}_${Date.now()}`;
   const safeAngle = (content_angle || 'workout').replace(/[^a-z0-9\-]/gi, '_').substring(0, 60);
-  const searchQuery = pexels_query || content_angle || 'fitness workout';
+  // Per-angle Pexels query map — ensures relevant fitness footage for each content type
+  const ANGLE_PEXELS_QUERIES = {
+    'form_analysis':          'runner jogging outdoor trail running exercise',
+    'workout_tips':           'gym workout exercise fitness training',
+    'transformation_story':   'fitness transformation before after workout progress',
+    'nutrition_advice':       'healthy food meal prep nutrition vegetables',
+    'nutrition_science':      'healthy food nutrition science meal prep',
+    'motivation':             'athlete training motivation sports fitness',
+    'recovery':               'stretching yoga recovery rest athlete',
+    'recovery_wellness':      'stretching yoga recovery wellness athlete',
+    'hiit':                   'hiit workout cardio exercise jumping',
+    'strength':               'weightlifting gym barbell strength training',
+    'cardio':                 'running jogging cardio exercise outdoor',
+    'mindset':                'meditation focus mindset athlete training',
+    'medication_fitness':     'person fitness health wellness active lifestyle',
+    'sleep':                  'person sleeping rest recovery wellness',
+    'hydration':              'person drinking water fitness hydration athlete',
+  };
+  const searchQuery = pexels_query || ANGLE_PEXELS_QUERIES[content_angle] || 'fitness workout exercise gym';
 
   const firstItem = video_items[0] || {};
   const scriptText = script || firstItem.script || '';
 
-  console.log(`[${jobId}] Starting assembly v3.3.0. dry_run=${dry_run}, query="${searchQuery}", angle="${content_angle}", word_timing=${word_timing.length} words`);
+  console.log(`[${jobId}] Starting assembly v3.4.0. dry_run=${dry_run}, query="${searchQuery}", angle="${content_angle}", word_timing=${word_timing.length} words`);
 
   if (dry_run) {
     return res.json({
@@ -565,6 +583,17 @@ app.post('/assemble', async (req, res) => {
     await downloadFile(voiceover_url, audioPath);
     const audioDuration = getAudioDuration(audioPath);
     console.log(`[${jobId}] Audio duration: ${audioDuration}s`);
+    // Bug 3 guard: reject suspiciously short audio (ElevenLabs partial/rate-limit response)
+    if (audioDuration < 5) {
+      console.error(`[${jobId}] REJECTED: audio too short (${audioDuration.toFixed(2)}s < 5s minimum). Likely ElevenLabs rate-limit or partial response.`);
+      tempFiles.forEach(f => { try { if (fs.existsSync(f)) fs.unlinkSync(f); } catch (e) {} });
+      return res.status(400).json({
+        success: false,
+        error: `Audio too short: ${audioDuration.toFixed(2)}s (minimum 5s). Retry with a valid voiceover.`,
+        audio_duration_seconds: audioDuration,
+        job_id: jobId
+      });
+    }
 
     // Step 2: Download YFIT logo
     console.log(`[${jobId}] Downloading YFIT logo...`);
@@ -766,7 +795,8 @@ app.post('/assemble', async (req, res) => {
     console.log(`[${jobId}] Final video: ${videoSize} bytes`);
 
     // Step 6: Upload to Supabase
-    const storagePath = `videos/${run_date}_${safeAngle}.mp4`;
+    const safeRunDate = run_date || new Date().toISOString().split('T')[0];
+    const storagePath = `videos/${safeRunDate}_${safeAngle}.mp4`;
     const videoUrl = await uploadToSupabase(finalPath, storagePath, 'video/mp4');
     console.log(`[${jobId}] Uploaded: ${videoUrl}`);
 
@@ -794,7 +824,7 @@ app.post('/assemble', async (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`YFIT Video Service v3.3.0 running on port ${PORT}`);
+  console.log(`YFIT Video Service v3.4.0 running on port ${PORT}`);
   console.log(`Pexels API: ${PEXELS_API_KEY ? 'configured' : 'NOT configured - set PEXELS_API_KEY'}`);
   console.log(`Logo URL: ${YFIT_LOGO_URL}`);
   console.log(`BGM: Primary=${BGM_TRACKS.primary.split('/').pop()}, Energetic=${BGM_TRACKS.energetic.split('/').pop()}, Deep=${BGM_TRACKS.deep.split('/').pop()}`);
