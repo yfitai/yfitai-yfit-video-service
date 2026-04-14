@@ -1,6 +1,6 @@
 'use strict';
 // ============================================================
-// YFIT Video Service v3.4.0
+// YFIT Video Service v3.4.1
 // ============================================================
 // CHANGES vs v3.2.0:
 //
@@ -86,7 +86,7 @@ app.get('/health', (req, res) => {
     status: 'ok',
     ffmpeg: ffmpegVersion,
     pexels: PEXELS_API_KEY ? 'configured' : 'missing',
-    version: '3.4.0',
+    version: '3.4.1',
     timestamp: new Date().toISOString()
   });
 });
@@ -749,11 +749,11 @@ app.post('/assemble', async (req, res) => {
     let finalCmd;
     if (logoExists) {
       if (bgmExists) {
-        const fc = `[0:v]${vfOnlyFilters}[vbase];[1:v]scale=240:-1,format=rgba[logo];[vbase][logo]overlay=x=20:y=10:format=auto[vout];[2:a]aresample=44100,volume=${BGM_VOLUME},aloop=loop=-1:size=2e+09[bgm];[3:a]aresample=44100,loudnorm=I=-16:TP=-1.5:LRA=11[voice];[voice][bgm]amix=inputs=2:duration=first:dropout_transition=3[aout]`;
+        const fc = `[0:v]${vfOnlyFilters}[vbase];[1:v]scale=240:-1,format=rgba[logo];[vbase][logo]overlay=x=20:y=10:format=auto[vout];[2:a]aresample=48000,highpass=f=80,volume=${BGM_VOLUME},aloop=loop=-1:size=2e+09[bgm];[3:a]aresample=48000,loudnorm=I=-16:TP=-1.5:LRA=11[voice];[voice][bgm]amix=inputs=2:duration=first:dropout_transition=3[aout]`;
         fs.writeFileSync(fcScriptPath, fc);
-        finalCmd = `ffmpeg -y -i "${baseVideoPath}" -i "${logoPath}" -i "${bgmPath}" -i "${audioPath}" -filter_complex_script "${fcScriptPath}" -map "[vout]" -map "[aout]" -c:v libx264 -preset fast -crf 22 -c:a aac -b:a 192k -pix_fmt yuv420p -shortest -movflags +faststart "${finalPath}"`;
+        finalCmd = `ffmpeg -y -i "${baseVideoPath}" -i "${logoPath}" -i "${bgmPath}" -i "${audioPath}" -filter_complex_script "${fcScriptPath}" -map "[vout]" -map "[aout]" -c:v libx264 -preset fast -crf 22 -c:a aac -b:a 192k -ar 48000 -pix_fmt yuv420p -shortest -movflags +faststart "${finalPath}"`;
       } else {
-        const fc = `[0:v]${vfOnlyFilters}[vbase];[1:v]scale=240:-1,format=rgba[logo];[vbase][logo]overlay=x=20:y=10:format=auto[vout];[2:a]aresample=44100,loudnorm=I=-16:TP=-1.5:LRA=11[aout]`;
+        const fc = `[0:v]${vfOnlyFilters}[vbase];[1:v]scale=240:-1,format=rgba[logo];[vbase][logo]overlay=x=20:y=10:format=auto[vout];[2:a]aresample=48000,loudnorm=I=-16:TP=-1.5:LRA=11[aout]`;
         fs.writeFileSync(fcScriptPath, fc);
         finalCmd = `ffmpeg -y -i "${baseVideoPath}" -i "${logoPath}" -i "${audioPath}" -filter_complex_script "${fcScriptPath}" -map "[vout]" -map "[aout]" -c:v libx264 -preset fast -crf 22 -c:a aac -b:a 192k -pix_fmt yuv420p -shortest -movflags +faststart "${finalPath}"`;
       }
@@ -770,7 +770,7 @@ app.post('/assemble', async (req, res) => {
           `-i "${baseVideoPath}"`,
           `-i "${bgmPath}"`,
           `-i "${audioPath}"`,
-          `-filter_complex "[1:a]aresample=44100,volume=${BGM_VOLUME},aloop=loop=-1:size=2e+09[bgm];[2:a]aresample=44100,loudnorm=I=-16:TP=-1.5:LRA=11[voice];[voice][bgm]amix=inputs=2:duration=first:dropout_transition=3[aout]"`,
+          `-filter_complex "[1:a]aresample=48000,highpass=f=80,volume=${BGM_VOLUME},aloop=loop=-1:size=2e+09[bgm];[2:a]aresample=48000,loudnorm=I=-16:TP=-1.5:LRA=11[voice];[voice][bgm]amix=inputs=2:duration=first:dropout_transition=3[aout]"`,
           `-map 0:v -map "[aout]"`,
           `-vf "${fallbackVf}"`,
           `-c:v libx264 -preset fast -crf 22 -c:a aac -b:a 192k`,
