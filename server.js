@@ -1,6 +1,6 @@
 'use strict';
 // ============================================================
-// YFIT Video Service v3.6.1
+// YFIT Video Service v3.6.2
 // ============================================================
 // CHANGES vs v3.2.0:
 //
@@ -681,7 +681,9 @@ app.post('/assemble', async (req, res) => {
 
       if (trimmedPaths.length > 0) {
         const totalClipDuration = trimmedPaths.length * clipDuration;
-        const repeatsNeeded = Math.ceil(audioDuration / totalClipDuration);
+        // v3.6.2: use totalDuration (audio + CTA_HOLD) so clips cover the full video
+        // without repeating unnecessarily (was using audioDuration which caused 6 clips instead of 3)
+        const repeatsNeeded = Math.ceil(totalDuration / totalClipDuration);
         const allClips = [];
         for (let r = 0; r < repeatsNeeded; r++) allClips.push(...trimmedPaths);
 
@@ -841,7 +843,7 @@ app.post('/assemble', async (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`YFIT Video Service v3.6.1 running on port ${PORT}`);
+  console.log(`YFIT Video Service v3.6.2 running on port ${PORT}`);
   console.log(`Pexels API: ${PEXELS_API_KEY ? 'configured' : 'NOT configured - set PEXELS_API_KEY'}`);
   console.log(`Logo URL: ${YFIT_LOGO_URL}`);
   console.log(`BGM: Primary=${BGM_TRACKS.primary.split('/').pop()}, Energetic=${BGM_TRACKS.energetic.split('/').pop()}, Deep=${BGM_TRACKS.deep.split('/').pop()}`);
