@@ -1,6 +1,6 @@
 'use strict';
 // ============================================================
-// YFIT Video Service v3.6.2
+// YFIT Video Service v3.6.3
 // ============================================================
 // CHANGES vs v3.2.0:
 //
@@ -86,7 +86,7 @@ app.get('/health', (req, res) => {
     status: 'ok',
     ffmpeg: ffmpegVersion,
     pexels: PEXELS_API_KEY ? 'configured' : 'missing',
-    version: '3.6.0',
+    version: '3.6.3',
     timestamp: new Date().toISOString()
   });
 });
@@ -633,7 +633,9 @@ app.post('/assemble', async (req, res) => {
     if (pexelsClips.length > 0) {
       // v3.6.0: cap at 3 clips for short-form video (prevents clip doubling when some clips fail brightness check)
       const numClips = Math.min(pexelsClips.length, 3);
-      const clipDuration = Math.max(4.0, Math.min(7.0, audioDuration / numClips));
+      // v3.6.3: use totalDuration (audio + CTA_HOLD) so 3 clips cover the full video without repeating
+      // e.g. 38s total / 3 clips = 12.7s per clip — clips play once and cover everything
+      const clipDuration = Math.max(4.0, Math.min(15.0, totalDuration / numClips));
       const trimmedPaths = [];
 
       for (let i = 0; i < numClips; i++) {
@@ -681,9 +683,9 @@ app.post('/assemble', async (req, res) => {
 
       if (trimmedPaths.length > 0) {
         const totalClipDuration = trimmedPaths.length * clipDuration;
-        // v3.6.2: use totalDuration (audio + CTA_HOLD) so clips cover the full video
-        // without repeating unnecessarily (was using audioDuration which caused 6 clips instead of 3)
-        const repeatsNeeded = Math.ceil(totalDuration / totalClipDuration);
+        // v3.6.3: repeatsNeeded should always be 1 since clipDuration is now based on totalDuration
+        // Safety: still allow up to 2 repeats in case some clips were rejected and totalClipDuration < totalDuration
+        const repeatsNeeded = Math.min(2, Math.ceil(totalDuration / totalClipDuration));
         const allClips = [];
         for (let r = 0; r < repeatsNeeded; r++) allClips.push(...trimmedPaths);
 
