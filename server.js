@@ -1,6 +1,6 @@
 'use strict';
 // ============================================================
-// YFIT Video Service v3.6.0
+// YFIT Video Service v3.6.1
 // ============================================================
 // CHANGES vs v3.2.0:
 //
@@ -583,6 +583,11 @@ app.post('/assemble', async (req, res) => {
     await downloadFile(voiceover_url, audioPath);
     const audioDuration = getAudioDuration(audioPath);
     console.log(`[${jobId}] Audio duration: ${audioDuration}s`);
+    // v3.6.0: CTA_HOLD and totalDuration declared here so they are available
+    // throughout the assembly (clips, fallback bg, end card, final encode)
+    const CTA_HOLD = 8.0;
+    const totalDuration = audioDuration + CTA_HOLD;
+    console.log(`[${jobId}] Total video duration: ${totalDuration.toFixed(2)}s (audio ${audioDuration.toFixed(2)}s + CTA hold ${CTA_HOLD}s)`);
     // Bug 3 guard: reject suspiciously short audio (ElevenLabs partial/rate-limit response)
     if (audioDuration < 5) {
       console.error(`[${jobId}] REJECTED: audio too short (${audioDuration.toFixed(2)}s < 5s minimum). Likely ElevenLabs rate-limit or partial response.`);
@@ -732,8 +737,7 @@ app.post('/assemble', async (req, res) => {
     const cyclingFilters = buildCaptionFilters(segments, audioDuration, FONT_BOLD);
 
     // End card: v3.6.0 — 8 seconds AFTER audio ends (CTA hold frame)
-    const CTA_HOLD = 8.0;
-    const totalDuration = audioDuration + CTA_HOLD;
+    // NOTE: CTA_HOLD and totalDuration are declared earlier (after audioDuration) to avoid TDZ error
     const endCardStart = audioDuration;
     const endCardEnable = `enable='between(t,${endCardStart.toFixed(2)},${totalDuration.toFixed(2)})'`;
 
@@ -837,7 +841,7 @@ app.post('/assemble', async (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`YFIT Video Service v3.6.0 running on port ${PORT}`);
+  console.log(`YFIT Video Service v3.6.1 running on port ${PORT}`);
   console.log(`Pexels API: ${PEXELS_API_KEY ? 'configured' : 'NOT configured - set PEXELS_API_KEY'}`);
   console.log(`Logo URL: ${YFIT_LOGO_URL}`);
   console.log(`BGM: Primary=${BGM_TRACKS.primary.split('/').pop()}, Energetic=${BGM_TRACKS.energetic.split('/').pop()}, Deep=${BGM_TRACKS.deep.split('/').pop()}`);
