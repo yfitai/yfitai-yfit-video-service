@@ -1,6 +1,6 @@
 'use strict';
 // ============================================================
-// YFIT Video Service v3.5.0
+// YFIT Video Service v3.6.0
 // ============================================================
 // CHANGES vs v3.2.0:
 //
@@ -86,7 +86,7 @@ app.get('/health', (req, res) => {
     status: 'ok',
     ffmpeg: ffmpegVersion,
     pexels: PEXELS_API_KEY ? 'configured' : 'missing',
-    version: '3.4.1',
+    version: '3.6.0',
     timestamp: new Date().toISOString()
   });
 });
@@ -557,7 +557,7 @@ app.post('/assemble', async (req, res) => {
   const firstItem = video_items[0] || {};
   const scriptText = script || firstItem.script || '';
 
-  console.log(`[${jobId}] Starting assembly v3.4.0. dry_run=${dry_run}, query="${searchQuery}", angle="${content_angle}", word_timing=${word_timing.length} words`);
+  console.log(`[${jobId}] Starting assembly v3.6.0. dry_run=${dry_run}, query="${searchQuery}", angle="${content_angle}", word_timing=${word_timing.length} words`);
 
   if (dry_run) {
     return res.json({
@@ -626,8 +626,9 @@ app.post('/assemble', async (req, res) => {
     let baseVideoPath = null;
 
     if (pexelsClips.length > 0) {
-      const numClips = Math.min(pexelsClips.length, 6);
-      const clipDuration = Math.max(2.5, Math.min(4.0, audioDuration / numClips));
+      // v3.6.0: cap at 3 clips for short-form video (prevents clip doubling when some clips fail brightness check)
+      const numClips = Math.min(pexelsClips.length, 3);
+      const clipDuration = Math.max(4.0, Math.min(7.0, audioDuration / numClips));
       const trimmedPaths = [];
 
       for (let i = 0; i < numClips; i++) {
@@ -685,8 +686,9 @@ app.post('/assemble', async (req, res) => {
 
         const concatPath = path.join(TEMP_DIR, `${jobId}_concat.mp4`);
         tempFiles.push(concatPath);
+        // v3.6.0: extend clips to totalDuration (audioDuration + CTA_HOLD) so CTA hold frame has video
         execSync(
-          `ffmpeg -y -f concat -safe 0 -i "${concatListPath}" -t ${audioDuration.toFixed(2)} -c:v libx264 -preset fast -pix_fmt yuv420p -r 30 "${concatPath}"`,
+          `ffmpeg -y -f concat -safe 0 -i "${concatListPath}" -t ${totalDuration.toFixed(2)} -c:v libx264 -preset fast -pix_fmt yuv420p -r 30 "${concatPath}"`,
           { timeout: 300000, shell: true }
         );
         baseVideoPath = concatPath;
@@ -698,8 +700,9 @@ app.post('/assemble', async (req, res) => {
       console.log(`[${jobId}] Using fallback dark background`);
       const bgPath = path.join(TEMP_DIR, `${jobId}_bg.mp4`);
       tempFiles.push(bgPath);
+      // v3.6.0: extend fallback bg to totalDuration
       execSync(
-        `ffmpeg -y -f lavfi -i "color=c=0x0d1117:size=1080x1920:rate=30" -t ${audioDuration.toFixed(2)} -c:v libx264 -preset fast -pix_fmt yuv420p "${bgPath}"`,
+        `ffmpeg -y -f lavfi -i "color=c=0x0d1117:size=1080x1920:rate=30" -t ${totalDuration.toFixed(2)} -c:v libx264 -preset fast -pix_fmt yuv420p "${bgPath}"`,
         { timeout: 120000, shell: true }
       );
       baseVideoPath = bgPath;
@@ -728,9 +731,11 @@ app.post('/assemble', async (req, res) => {
     const logoExists = fs.existsSync(logoPath) && fs.statSync(logoPath).size > 1000;
     const cyclingFilters = buildCaptionFilters(segments, audioDuration, FONT_BOLD);
 
-    // End card: last 3 seconds
-    const endCardStart = Math.max(0, audioDuration - 3.0);
-    const endCardEnable = `enable='between(t,${endCardStart.toFixed(2)},${audioDuration.toFixed(2)})'`;
+    // End card: v3.6.0 — 8 seconds AFTER audio ends (CTA hold frame)
+    const CTA_HOLD = 8.0;
+    const totalDuration = audioDuration + CTA_HOLD;
+    const endCardStart = audioDuration;
+    const endCardEnable = `enable='between(t,${endCardStart.toFixed(2)},${totalDuration.toFixed(2)})'`;
 
     const staticVfFilters = [
       `eq=contrast=1.05`,
@@ -749,13 +754,15 @@ app.post('/assemble', async (req, res) => {
     let finalCmd;
     if (logoExists) {
       if (bgmExists) {
-        const fc = `[0:v]${vfOnlyFilters}[vbase];[1:v]scale=240:-1,format=rgba[logo];[vbase][logo]overlay=x=20:y=10:format=auto[vout];[2:a]aresample=48000,highpass=f=150,lowpass=f=12000,volume=${BGM_VOLUME},aloop=loop=-1:size=2e+09,afade=t=in:st=0:d=1.5,afade=t=out:st=999:d=2[bgm];[3:a]aresample=48000,loudnorm=I=-16:TP=-1.5:LRA=11[voice];[voice][bgm]amix=inputs=2:duration=first:dropout_transition=3[aout]`;
+        // v3.6.0: pad audio with CTA_HOLD seconds of silence so video runs full totalDuration
+        const fc = `[0:v]${vfOnlyFilters}[vbase];[1:v]scale=240:-1,format=rgba[logo];[vbase][logo]overlay=x=20:y=10:format=auto[vout];[2:a]aresample=48000,highpass=f=150,lowpass=f=12000,volume=${BGM_VOLUME},aloop=loop=-1:size=2e+09,afade=t=in:st=0:d=1.5,afade=t=out:st=999:d=2[bgm];[3:a]aresample=48000,loudnorm=I=-16:TP=-1.5:LRA=11[voice];aevalsrc=0:c=stereo:s=48000:d=${CTA_HOLD.toFixed(1)}[silence];[voice][silence]concat=n=2:v=0:a=1[voicepadded];[voicepadded][bgm]amix=inputs=2:duration=first:dropout_transition=3[aout]`;
         fs.writeFileSync(fcScriptPath, fc);
-        finalCmd = `ffmpeg -y -i "${baseVideoPath}" -i "${logoPath}" -i "${bgmPath}" -i "${audioPath}" -filter_complex_script "${fcScriptPath}" -map "[vout]" -map "[aout]" -c:v libx264 -preset fast -crf 22 -c:a aac -b:a 192k -ar 48000 -pix_fmt yuv420p -shortest -movflags +faststart "${finalPath}"`;
+        finalCmd = `ffmpeg -y -i "${baseVideoPath}" -i "${logoPath}" -i "${bgmPath}" -i "${audioPath}" -filter_complex_script "${fcScriptPath}" -map "[vout]" -map "[aout]" -t ${totalDuration.toFixed(2)} -c:v libx264 -preset fast -crf 22 -c:a aac -b:a 192k -ar 48000 -pix_fmt yuv420p -movflags +faststart "${finalPath}"`;
       } else {
-        const fc = `[0:v]${vfOnlyFilters}[vbase];[1:v]scale=240:-1,format=rgba[logo];[vbase][logo]overlay=x=20:y=10:format=auto[vout];[2:a]aresample=48000,loudnorm=I=-16:TP=-1.5:LRA=11[aout]`;
+        // v3.6.0: pad audio with silence for CTA hold (no BGM path)
+        const fc = `[0:v]${vfOnlyFilters}[vbase];[1:v]scale=240:-1,format=rgba[logo];[vbase][logo]overlay=x=20:y=10:format=auto[vout];[2:a]aresample=48000,loudnorm=I=-16:TP=-1.5:LRA=11[voice];aevalsrc=0:c=stereo:s=48000:d=${CTA_HOLD.toFixed(1)}[silence];[voice][silence]concat=n=2:v=0:a=1[aout]`;
         fs.writeFileSync(fcScriptPath, fc);
-        finalCmd = `ffmpeg -y -i "${baseVideoPath}" -i "${logoPath}" -i "${audioPath}" -filter_complex_script "${fcScriptPath}" -map "[vout]" -map "[aout]" -c:v libx264 -preset fast -crf 22 -c:a aac -b:a 192k -pix_fmt yuv420p -shortest -movflags +faststart "${finalPath}"`;
+        finalCmd = `ffmpeg -y -i "${baseVideoPath}" -i "${logoPath}" -i "${audioPath}" -filter_complex_script "${fcScriptPath}" -map "[vout]" -map "[aout]" -t ${totalDuration.toFixed(2)} -c:v libx264 -preset fast -crf 22 -c:a aac -b:a 192k -pix_fmt yuv420p -movflags +faststart "${finalPath}"`;
       }
     } else {
       // Text-only fallback if logo download failed
@@ -765,26 +772,32 @@ app.post('/assemble', async (req, res) => {
         ...cyclingFilters
       ].join(',');
       if (bgmExists) {
+        // v3.6.0: pad audio with silence for CTA hold (no-logo + BGM path)
         finalCmd = [
           'ffmpeg -y',
           `-i "${baseVideoPath}"`,
           `-i "${bgmPath}"`,
           `-i "${audioPath}"`,
-          `-filter_complex "[1:a]aresample=48000,highpass=f=150,lowpass=f=12000,volume=${BGM_VOLUME},aloop=loop=-1:size=2e+09,afade=t=in:st=0:d=1.5,afade=t=out:st=999:d=2[bgm];[2:a]aresample=48000,loudnorm=I=-16:TP=-1.5:LRA=11[voice];[voice][bgm]amix=inputs=2:duration=first:dropout_transition=3[aout]"`,
+          `-filter_complex "[1:a]aresample=48000,highpass=f=150,lowpass=f=12000,volume=${BGM_VOLUME},aloop=loop=-1:size=2e+09,afade=t=in:st=0:d=1.5,afade=t=out:st=999:d=2[bgm];[2:a]aresample=48000,loudnorm=I=-16:TP=-1.5:LRA=11[voice];aevalsrc=0:c=stereo:s=48000:d=${CTA_HOLD.toFixed(1)}[silence];[voice][silence]concat=n=2:v=0:a=1[voicepadded];[voicepadded][bgm]amix=inputs=2:duration=first:dropout_transition=3[aout]"`,
           `-map 0:v -map "[aout]"`,
           `-vf "${fallbackVf}"`,
+          `-t ${totalDuration.toFixed(2)}`,
           `-c:v libx264 -preset fast -crf 22 -c:a aac -b:a 192k`,
-          `-pix_fmt yuv420p -shortest -movflags +faststart`,
+          `-pix_fmt yuv420p -movflags +faststart`,
           `"${finalPath}"`
         ].join(' ');
       } else {
+        // v3.6.0: pad audio with silence for CTA hold (no-logo, no-BGM path)
         finalCmd = [
           'ffmpeg -y',
           `-i "${baseVideoPath}"`,
           `-i "${audioPath}"`,
+          `-filter_complex "[1:a]aresample=48000,loudnorm=I=-16:TP=-1.5:LRA=11[voice];aevalsrc=0:c=stereo:s=48000:d=${CTA_HOLD.toFixed(1)}[silence];[voice][silence]concat=n=2:v=0:a=1[aout]"`,
+          `-map 0:v -map "[aout]"`,
           `-vf "${fallbackVf}"`,
-          `-c:v libx264 -preset fast -crf 22 -c:a aac -b:a 192k -af "loudnorm=I=-16:TP=-1.5:LRA=11"`,
-          `-pix_fmt yuv420p -shortest -movflags +faststart`,
+          `-t ${totalDuration.toFixed(2)}`,
+          `-c:v libx264 -preset fast -crf 22 -c:a aac -b:a 192k`,
+          `-pix_fmt yuv420p -movflags +faststart`,
           `"${finalPath}"`
         ].join(' ');
       }
@@ -824,7 +837,7 @@ app.post('/assemble', async (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`YFIT Video Service v3.4.0 running on port ${PORT}`);
+  console.log(`YFIT Video Service v3.6.0 running on port ${PORT}`);
   console.log(`Pexels API: ${PEXELS_API_KEY ? 'configured' : 'NOT configured - set PEXELS_API_KEY'}`);
   console.log(`Logo URL: ${YFIT_LOGO_URL}`);
   console.log(`BGM: Primary=${BGM_TRACKS.primary.split('/').pop()}, Energetic=${BGM_TRACKS.energetic.split('/').pop()}, Deep=${BGM_TRACKS.deep.split('/').pop()}`);
