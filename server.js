@@ -1,6 +1,6 @@
 'use strict';
 // ============================================================
-// YFIT Video Service v3.6.4
+// YFIT Video Service v3.6.5
 // ============================================================
 // CHANGES vs v3.2.0:
 //
@@ -86,7 +86,7 @@ app.get('/health', (req, res) => {
     status: 'ok',
     ffmpeg: ffmpegVersion,
     pexels: PEXELS_API_KEY ? 'configured' : 'missing',
-    version: '3.6.4',
+    version: '3.6.5',
     timestamp: new Date().toISOString()
   });
 });
@@ -522,8 +522,10 @@ app.post('/assemble', async (req, res) => {
   let {
     voiceover_url, run_date, content_angle, caption_text, script,
     video_items = [], text_items = [], dry_run = false, pexels_query,
-    word_timing = []
+    word_timing = [],
+    burn_captions = true  // v3.6.5: set to false to skip burned-in captions (e.g. for YouTube which has auto-captions)
   } = req.body;
+  if (typeof burn_captions === 'string') { burn_captions = burn_captions !== 'false'; }
 
   if (typeof word_timing === 'string') { try { word_timing = JSON.parse(word_timing); } catch(e) { word_timing = []; } }
   if (typeof video_items === 'string') { try { video_items = JSON.parse(video_items); } catch(e) { video_items = []; } }
@@ -745,10 +747,11 @@ app.post('/assemble', async (req, res) => {
     console.log(`[${jobId}] Final: ${segments.length} caption segments`);
 
     // Step 5: Compose final video
-    console.log(`[${jobId}] Composing final video...`);
+    console.log(`[${jobId}] Composing final video... burn_captions=${burn_captions}`);
 
     const logoExists = fs.existsSync(logoPath) && fs.statSync(logoPath).size > 1000;
-    const cyclingFilters = buildCaptionFilters(segments, audioDuration, FONT_BOLD);
+    // v3.6.5: skip burned-in captions when burn_captions=false (e.g. YouTube uses auto-captions)
+    const cyclingFilters = burn_captions ? buildCaptionFilters(segments, audioDuration, FONT_BOLD) : [];
 
     // End card: v3.6.0 — 8 seconds AFTER audio ends (CTA hold frame)
     // NOTE: CTA_HOLD and totalDuration are declared earlier (after audioDuration) to avoid TDZ error
@@ -765,7 +768,7 @@ app.post('/assemble', async (req, res) => {
       `drawtext=fontfile=${FONT_BOLD}:text='yfitai.com':fontsize=64:fontcolor=${YFIT_GREEN}:x=(w-text_w)/2:y=(h/2)-2:shadowcolor=black@0.9:shadowx=3:shadowy=3:${endCardEnable}`,
     ];
 
-    const vfOnlyFilters = [...staticVfFilters, ...cyclingFilters].join(',');
+    const vfOnlyFilters = [...staticVfFilters, ...(burn_captions ? cyclingFilters : [])].join(',');
 
     const fcScriptPath = path.join(TEMP_DIR, `${jobId}_fc.txt`);
     tempFiles.push(fcScriptPath);
@@ -855,7 +858,7 @@ app.post('/assemble', async (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`YFIT Video Service v3.6.4 running on port ${PORT}`);
+  console.log(`YFIT Video Service v3.6.5 running on port ${PORT}`);
   console.log(`Pexels API: ${PEXELS_API_KEY ? 'configured' : 'NOT configured - set PEXELS_API_KEY'}`);
   console.log(`Logo URL: ${YFIT_LOGO_URL}`);
   console.log(`BGM: Primary=${BGM_TRACKS.primary.split('/').pop()}, Energetic=${BGM_TRACKS.energetic.split('/').pop()}, Deep=${BGM_TRACKS.deep.split('/').pop()}`);
