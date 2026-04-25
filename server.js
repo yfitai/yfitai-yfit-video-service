@@ -1,6 +1,6 @@
 'use strict';
 // ============================================================
-// YFIT Video Service v3.6.3
+// YFIT Video Service v3.6.4
 // ============================================================
 // CHANGES vs v3.2.0:
 //
@@ -86,7 +86,7 @@ app.get('/health', (req, res) => {
     status: 'ok',
     ffmpeg: ffmpegVersion,
     pexels: PEXELS_API_KEY ? 'configured' : 'missing',
-    version: '3.6.3',
+    version: '3.6.4',
     timestamp: new Date().toISOString()
   });
 });
@@ -633,10 +633,14 @@ app.post('/assemble', async (req, res) => {
     if (pexelsClips.length > 0) {
       // v3.6.0: cap at 3 clips for short-form video (prevents clip doubling when some clips fail brightness check)
       const numClips = Math.min(pexelsClips.length, 3);
-      // v3.6.3: use totalDuration (audio + CTA_HOLD) so 3 clips cover the full video without repeating
-      // e.g. 38s total / 3 clips = 12.7s per clip — clips play once and cover everything
-      const clipDuration = Math.max(4.0, Math.min(15.0, totalDuration / numClips));
+      // v3.6.4: use audioDuration/numClips (NOT totalDuration) so clips are short enough that
+      // Pexels can actually provide them. Pexels clips are often only 6-10s; asking for 12.7s
+      // means the trimmed clip is shorter than requested, making totalClipDuration too short
+      // to reach the CTA window at t=audioDuration..totalDuration.
+      // repeatsNeeded (below) uses the REAL measured clip durations to ensure full coverage.
+      const clipDuration = Math.max(4.0, Math.min(10.0, audioDuration / numClips));
       const trimmedPaths = [];
+      const actualClipDurations = []; // v3.6.4: track real durations for accurate repeatsNeeded
 
       for (let i = 0; i < numClips; i++) {
         const clip = pexelsClips[i];
@@ -666,26 +670,32 @@ app.post('/assemble', async (req, res) => {
           console.log(`[${jobId}] Clip ${i} accepted: top brightness ${topBrightness.toFixed(1)}`);
 
           const portraitFilter = `scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1,eq=brightness=0.08:contrast=1.12:saturation=1.1`;
+          // v3.6.4: loop the clip so it fills exactly clipDuration even if the source is shorter
+          // -stream_loop -1 loops the input indefinitely; -t clipDuration stops at the right time
           const trimCmd = [
             'ffmpeg -y',
-            `-i "${rawPath}"`,
+            `-stream_loop -1 -i "${rawPath}"`,
             `-t ${clipDuration.toFixed(2)}`,
             `-vf "${portraitFilter}"`,
             `-c:v libx264 -preset fast -pix_fmt yuv420p -an -r 30`,
             `"${trimPath}"`
           ].join(' ');
           execSync(trimCmd, { timeout: 120000, shell: true });
+          // Each clip is now exactly clipDuration (looped to fill if needed)
+          console.log(`[${jobId}] Clip ${i} trimmed to ${clipDuration.toFixed(2)}s (looped if source was shorter)`);
           trimmedPaths.push(trimPath);
+          actualClipDurations.push(clipDuration);
         } catch (e) {
           console.warn(`[${jobId}] Clip ${i} failed: ${e.message}`);
         }
       }
 
       if (trimmedPaths.length > 0) {
-        const totalClipDuration = trimmedPaths.length * clipDuration;
-        // v3.6.3: repeatsNeeded should always be 1 since clipDuration is now based on totalDuration
-        // Safety: still allow up to 2 repeats in case some clips were rejected and totalClipDuration < totalDuration
-        const repeatsNeeded = Math.min(2, Math.ceil(totalDuration / totalClipDuration));
+        // v3.6.4: use REAL measured durations (not target clipDuration) so repeatsNeeded is accurate
+        // This prevents the CTA from being cut off when Pexels clips are shorter than requested
+        const realTotalClipDuration = actualClipDurations.reduce((a, b) => a + b, 0);
+        const repeatsNeeded = Math.min(4, Math.ceil(totalDuration / realTotalClipDuration));
+        console.log(`[${jobId}] Clips: ${trimmedPaths.length} clips, real total=${realTotalClipDuration.toFixed(2)}s, repeatsNeeded=${repeatsNeeded} to cover ${totalDuration.toFixed(2)}s`);
         const allClips = [];
         for (let r = 0; r < repeatsNeeded; r++) allClips.push(...trimmedPaths);
 
@@ -845,7 +855,7 @@ app.post('/assemble', async (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`YFIT Video Service v3.6.2 running on port ${PORT}`);
+  console.log(`YFIT Video Service v3.6.4 running on port ${PORT}`);
   console.log(`Pexels API: ${PEXELS_API_KEY ? 'configured' : 'NOT configured - set PEXELS_API_KEY'}`);
   console.log(`Logo URL: ${YFIT_LOGO_URL}`);
   console.log(`BGM: Primary=${BGM_TRACKS.primary.split('/').pop()}, Energetic=${BGM_TRACKS.energetic.split('/').pop()}, Deep=${BGM_TRACKS.deep.split('/').pop()}`);
