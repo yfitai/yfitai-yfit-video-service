@@ -1,6 +1,6 @@
 'use strict';
 // ============================================================
-// YFIT Video Service v3.6.5
+// YFIT Video Service v3.7.2
 // ============================================================
 // CHANGES vs v3.2.0:
 //
@@ -86,7 +86,7 @@ app.get('/health', (req, res) => {
     status: 'ok',
     ffmpeg: ffmpegVersion,
     pexels: PEXELS_API_KEY ? 'configured' : 'missing',
-    version: '3.6.5',
+    version: '3.7.2',
     timestamp: new Date().toISOString()
   });
 });
@@ -633,8 +633,9 @@ app.post('/assemble', async (req, res) => {
     let baseVideoPath = null;
 
     if (pexelsClips.length > 0) {
-      // v3.6.0: cap at 3 clips for short-form video (prevents clip doubling when some clips fail brightness check)
-      const numClips = Math.min(pexelsClips.length, 3);
+      // v3.7.2: target 5 clips for personal story content (~60s videos, no looping needed)
+      const TARGET_CLIPS = 5;
+      const numClips = Math.min(pexelsClips.length, TARGET_CLIPS);
       // v3.6.4: use audioDuration/numClips (NOT totalDuration) so clips are short enough that
       // Pexels can actually provide them. Pexels clips are often only 6-10s; asking for 12.7s
       // means the trimmed clip is shorter than requested, making totalClipDuration too short
@@ -689,6 +690,37 @@ app.post('/assemble', async (req, res) => {
           actualClipDurations.push(clipDuration);
         } catch (e) {
           console.warn(`[${jobId}] Clip ${i} failed: ${e.message}`);
+        }
+      }
+
+      // v3.7.2: if brightness failures left us with fewer than 3 clips, top up with a broader fallback query
+      if (trimmedPaths.length > 0 && trimmedPaths.length < 3) {
+        console.log(`[${jobId}] Only ${trimmedPaths.length} clips passed brightness check — fetching extras with broad fallback query`);
+        const extraRaw = await searchPexels('fitness workout gym exercise');
+        for (const clip of extraRaw) {
+          if (trimmedPaths.length >= TARGET_CLIPS) break;
+          const ei = trimmedPaths.length;
+          const rawPath = path.join(TEMP_DIR, `${jobId}_raw_extra_${ei}.mp4`);
+          const trimPath = path.join(TEMP_DIR, `${jobId}_clip_extra_${ei}.mp4`);
+          tempFiles.push(rawPath, trimPath);
+          try {
+            await downloadFile(clip.url, rawPath);
+            if (fs.statSync(rawPath).size < 50000) continue;
+            const pf = `scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1,eq=brightness=0.08:contrast=1.12:saturation=1.1`;
+            execSync([
+              'ffmpeg -y',
+              `-stream_loop -1 -i "${rawPath}"`,
+              `-t ${clipDuration.toFixed(2)}`,
+              `-vf "${pf}"`,
+              `-c:v libx264 -preset fast -pix_fmt yuv420p -an -r 30`,
+              `"${trimPath}"`
+            ].join(' '), { timeout: 120000, shell: true });
+            trimmedPaths.push(trimPath);
+            actualClipDurations.push(clipDuration);
+            console.log(`[${jobId}] Extra clip ${ei} added from broad fallback`);
+          } catch (e) {
+            console.warn(`[${jobId}] Extra clip ${ei} failed: ${e.message}`);
+          }
         }
       }
 
@@ -834,6 +866,54 @@ app.post('/assemble', async (req, res) => {
     const videoUrl = await uploadToSupabase(finalPath, storagePath, 'video/mp4');
     console.log(`[${jobId}] Uploaded: ${videoUrl}`);
 
+    // v3.7.2: Generate SRT caption file from word_timing (correct YFIT spelling, no auto-caption errors)
+    // Upload to Supabase Storage and return srt_url for Upload-Post subtitles_url parameter
+    let srtContent = '';
+    let srtUrl = '';
+    if (word_timing && word_timing.length > 0) {
+      const WORDS_PER_SRT_LINE = 6;
+      let srtIndex = 1;
+      const srtLines = [];
+      for (let wi = 0; wi < word_timing.length; wi += WORDS_PER_SRT_LINE) {
+        const chunk = word_timing.slice(wi, wi + WORDS_PER_SRT_LINE);
+        const startSec = chunk[0].start || 0;
+        const endSec = chunk[chunk.length - 1].end || (startSec + 2);
+        const toSrtTime = (s) => {
+          const h = Math.floor(s / 3600);
+          const m = Math.floor((s % 3600) / 60);
+          const sec = Math.floor(s % 60);
+          const ms = Math.round((s % 1) * 1000);
+          return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(sec).padStart(2,'0')},${String(ms).padStart(3,'0')}`;
+        };
+        // Fix common brand name misspellings
+        const lineText = chunk.map(w => w.word).join(' ')
+          .replace(/[Ww]yfit/g, 'YFIT')
+          .replace(/[Ww]y[- ]?[Ff]it/g, 'YFIT')
+          .replace(/[Yy]fit/g, 'YFIT');
+        srtLines.push(`${srtIndex}\n${toSrtTime(startSec)} --> ${toSrtTime(endSec)}\n${lineText}\n`);
+        srtIndex++;
+      }
+      srtContent = srtLines.join('\n');
+      console.log(`[${jobId}] Generated SRT: ${srtIndex - 1} caption lines`);
+      // Upload SRT to Supabase Storage so Upload-Post can fetch it via URL
+      try {
+        const srtPath = `captions/${safeRunDate}_${safeAngle}.srt`;
+        const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
+        const { error: srtErr } = await supabase.storage
+          .from('yfit-videos')
+          .upload(srtPath, Buffer.from(srtContent, 'utf8'), { contentType: 'text/plain', upsert: true });
+        if (!srtErr) {
+          const encodedSrtPath = srtPath.split('/').map(s => encodeURIComponent(s)).join('/');
+          srtUrl = `${SUPABASE_URL}/storage/v1/object/public/yfit-videos/${encodedSrtPath}`;
+          console.log(`[${jobId}] SRT uploaded: ${srtUrl}`);
+        } else {
+          console.warn(`[${jobId}] SRT upload failed: ${srtErr.message}`);
+        }
+      } catch (e) {
+        console.warn(`[${jobId}] SRT upload error: ${e.message}`);
+      }
+    }
+
     // Cleanup temp files
     tempFiles.forEach(f => { try { if (fs.existsSync(f)) fs.unlinkSync(f); } catch (e) {} });
 
@@ -842,9 +922,12 @@ app.post('/assemble', async (req, res) => {
       video_url: videoUrl,
       video_size_bytes: videoSize,
       pexels_clips_used: pexelsClips.length,
+      clips_used: trimmedPaths.length,
       tips_count: segments.length,
       bgm_track: selectedBgmName,
       caption_sync_mode: (word_timing && word_timing.length > 0) ? 'word_timing' : 'proportional',
+      srt_content: srtContent,
+      srt_url: srtUrl,
       platforms: video_items.map(v => v.platform),
       text_platforms: text_items.map(t => t.platform),
       voiceover_url, content_angle, run_date
@@ -858,7 +941,7 @@ app.post('/assemble', async (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`YFIT Video Service v3.6.5 running on port ${PORT}`);
+  console.log(`YFIT Video Service v3.7.2 running on port ${PORT}`);
   console.log(`Pexels API: ${PEXELS_API_KEY ? 'configured' : 'NOT configured - set PEXELS_API_KEY'}`);
   console.log(`Logo URL: ${YFIT_LOGO_URL}`);
   console.log(`BGM: Primary=${BGM_TRACKS.primary.split('/').pop()}, Energetic=${BGM_TRACKS.energetic.split('/').pop()}, Deep=${BGM_TRACKS.deep.split('/').pop()}`);
