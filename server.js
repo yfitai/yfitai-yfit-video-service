@@ -1,6 +1,6 @@
 'use strict';
 // ============================================================
-// YFIT Video Service v3.7.2
+// YFIT Video Service v3.7.3
 // ============================================================
 // CHANGES vs v3.2.0:
 //
@@ -38,6 +38,7 @@ const { createClient } = require('@supabase/supabase-js');
 
 const app = express();
 app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 const PORT = process.env.PORT || 3001;
 const SUPABASE_URL = process.env.SUPABASE_URL || 'https://mxggxpoxgqubojvumjlt.supabase.co';
@@ -86,7 +87,7 @@ app.get('/health', (req, res) => {
     status: 'ok',
     ffmpeg: ffmpegVersion,
     pexels: PEXELS_API_KEY ? 'configured' : 'missing',
-    version: '3.7.2',
+    version: '3.7.3',
     timestamp: new Date().toISOString()
   });
 });
