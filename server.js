@@ -633,7 +633,7 @@ app.post('/assemble', async (req, res) => {
     console.log(`[${jobId}] Got ${pexelsClips.length} Pexels clips`);
 
     let baseVideoPath = null;
-
+    let trimmedPaths = []; // v3.7.4: declared outside if block to avoid ReferenceError when pexelsClips is empty
     if (pexelsClips.length > 0) {
       // v3.7.2: target 5 clips for personal story content (~60s videos, no looping needed)
       const TARGET_CLIPS = 5;
@@ -644,8 +644,7 @@ app.post('/assemble', async (req, res) => {
       // to reach the CTA window at t=audioDuration..totalDuration.
       // repeatsNeeded (below) uses the REAL measured clip durations to ensure full coverage.
       const clipDuration = Math.max(4.0, Math.min(10.0, audioDuration / numClips));
-      const trimmedPaths = [];
-      const actualClipDurations = []; // v3.6.4: track real durations for accurate repeatsNeeded
+      const actualClipDurations = []; // v3.6.4: track real durations for accurate repeatsNeededd
 
       for (let i = 0; i < numClips; i++) {
         const clip = pexelsClips[i];
