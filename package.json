@@ -13,6 +13,7 @@
     "axios": "^1.6.0",
     "sharp": "^0.33.0",
     "canvas": "^2.11.2",
-    "@supabase/supabase-js": "^2.39.0"
+    "@supabase/supabase-js": "^2.39.0",
+    "ws": "^8.18.0"
   }
 }

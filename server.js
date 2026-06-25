@@ -1,6 +1,6 @@
 'use strict';
 // ============================================================
-// YFIT Video Service v3.7.3
+// YFIT Video Service v3.7.4
 // ============================================================
 // CHANGES vs v3.2.0:
 //
@@ -35,6 +35,7 @@ const path = require('path');
 const https = require('https');
 const http = require('http');
 const { createClient } = require('@supabase/supabase-js');
+const ws = require('ws');
 
 const app = express();
 app.use(express.json({ limit: '50mb' }));
@@ -87,7 +88,7 @@ app.get('/health', (req, res) => {
     status: 'ok',
     ffmpeg: ffmpegVersion,
     pexels: PEXELS_API_KEY ? 'configured' : 'missing',
-    version: '3.7.3',
+    version: '3.7.4',
     timestamp: new Date().toISOString()
   });
 });
@@ -211,7 +212,7 @@ function getAudioDuration(audioPath) {
 
 // Upload to Supabase Storage
 async function uploadToSupabase(localPath, storagePath, mimeType) {
-  const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
+  const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY, { realtime: { transport: ws } });
   const fileBuffer = fs.readFileSync(localPath);
   const { error } = await supabase.storage
     .from('yfit-videos')
@@ -899,7 +900,7 @@ app.post('/assemble', async (req, res) => {
       // Upload SRT to Supabase Storage so Upload-Post can fetch it via URL
       try {
         const srtPath = `captions/${safeRunDate}_${safeAngle}.srt`;
-        const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
+        const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY, { realtime: { transport: ws } });
         const { error: srtErr } = await supabase.storage
           .from('yfit-videos')
           .upload(srtPath, Buffer.from(srtContent, 'utf8'), { contentType: 'text/plain', upsert: true });
