@@ -1,6 +1,6 @@
 'use strict';
 // ============================================================
-// YFIT Video Service v3.7.4
+// YFIT Video Service v3.8.0
 // ============================================================
 // CHANGES vs v3.2.0:
 //
@@ -88,7 +88,7 @@ app.get('/health', (req, res) => {
     status: 'ok',
     ffmpeg: ffmpegVersion,
     pexels: PEXELS_API_KEY ? 'configured' : 'missing',
-    version: '3.7.4',
+    version: '3.8.0',
     timestamp: new Date().toISOString()
   });
 });
@@ -127,7 +127,7 @@ function searchPexels(query) {
     const q = encodeURIComponent(humanTerm);
     const options = {
       hostname: 'api.pexels.com',
-      path: `/videos/search?query=${q}&per_page=20&orientation=portrait&size=medium`,
+      path: `/videos/search?query=${q}&per_page=50&orientation=portrait&size=medium`,
       method: 'GET',
       headers: { 'Authorization': PEXELS_API_KEY }
     };
@@ -147,8 +147,13 @@ function searchPexels(query) {
                       files[0];
             if (f && f.link) {
               clips.push({ url: f.link, duration: video.duration || 10 });
-              if (clips.length >= 6) break;
+              if (clips.length >= 15) break; // v3.8.0: collect 15 candidates so brightness filter has enough
             }
+          }
+          // v3.8.0: shuffle so each run gets a different random selection
+          for (let i = clips.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [clips[i], clips[j]] = [clips[j], clips[i]];
           }
           resolve(clips);
         } catch (e) { resolve([]); }
@@ -188,11 +193,34 @@ async function getPexelsClips(query) {
     'athlete training sports'
   ];
 
-  const fallbacks = [query, ...specificTerms, ...fitnessOnlyFallbacks];
-  for (const q of fallbacks) {
+  // v3.8.0: aggregate clips from multiple queries to maximise variety
+  // Run the primary query + up to 2 specific terms in parallel, merge and shuffle
+  const primaryQueries = [query, ...specificTerms.slice(0, 2)];
+  const results = await Promise.all(primaryQueries.map(q => searchPexels(q)));
+  const seen = new Set();
+  const merged = [];
+  for (const batch of results) {
+    for (const clip of batch) {
+      if (!seen.has(clip.url)) {
+        seen.add(clip.url);
+        merged.push(clip);
+      }
+    }
+  }
+  // Shuffle the merged pool for randomness across runs
+  for (let i = merged.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [merged[i], merged[j]] = [merged[j], merged[i]];
+  }
+  if (merged.length > 0) {
+    console.log(`[Pexels] Aggregated ${merged.length} unique clips from ${primaryQueries.length} queries`);
+    return merged;
+  }
+  // Final fallback: broad fitness queries
+  for (const q of fitnessOnlyFallbacks) {
     const clips = await searchPexels(q);
     if (clips.length > 0) {
-      console.log(`[Pexels] Found ${clips.length} clips for query: "${q}"`);
+      console.log(`[Pexels] Fallback found ${clips.length} clips for query: "${q}"`);
       return clips;
     }
   }
