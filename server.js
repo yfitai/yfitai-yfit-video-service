@@ -989,15 +989,14 @@ app.post('/assemble', async (req, res) => {
         overlayEvents.forEach((ev, i) => {
           const screenIdx = screenStartIdx + i;
           const outLabel = (i === overlayEvents.length - 1) ? 'vbase' : `vbase${i + 1}`;
-          const alphaExpr =
-            `if(between(t\,${ev.startSec.toFixed(3)}\,${ev.endSec.toFixed(3)})\,` +
-            `min(1\,min((t-${ev.startSec.toFixed(3)})/${FADE_DUR}\,(${ev.endSec.toFixed(3)}-t)/${FADE_DUR}))\,0)`;
+          // Use overlay enable expression (simpler, no geq needed, works on all ffmpeg builds)
           lines.push(
             `[${screenIdx}:v]scale=1080:1920:force_original_aspect_ratio=increase,` +
-            `crop=1080:1920,setsar=1,format=rgba,` +
-            `geq=r='r(X\,Y)':g='g(X\,Y)':b='b(X\,Y)':a='255*${alphaExpr}'[screen${i}]`
+            `crop=1080:1920,setsar=1[screen${i}]`
           );
-          lines.push(`[${prevLabel}][screen${i}]overlay=0:0:format=auto[${outLabel}]`);
+          lines.push(
+            `[${prevLabel}][screen${i}]overlay=0:0:enable='between(t,${ev.startSec.toFixed(3)},${ev.endSec.toFixed(3)})':format=auto[${outLabel}]`
+          );
           prevLabel = outLabel;
         });
       } else {
