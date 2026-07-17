@@ -731,15 +731,23 @@ app.post('/assemble', async (req, res) => {
       });
     }
 
-    // Step 1b: v4.0.0 — Download app screen PNGs for overlay
+    // Step 1b: v4.0.0 — Resolve app screen PNGs for overlay (use startup cache if available)
     let screenSchedule = [];
     if (app_screens) {
       screenSchedule = resolveScreenSchedule(content_angle, audioDuration);
       const uniqueScreens = [...new Set(screenSchedule.map(s => s.screen))];
-      // Always download dashboard for the CTA hold
+      // Always include dashboard for the CTA hold
       if (!uniqueScreens.includes('dashboard')) uniqueScreens.push('dashboard');
-      console.log(`[${jobId}] v4.0.0: Downloading ${uniqueScreens.length} app screens: ${uniqueScreens.join(', ')}`);
+      const cachedCount = Object.keys(CACHED_SCREEN_PATHS).length;
+      console.log(`[${jobId}] v4.0.0: Resolving ${uniqueScreens.length} app screens (startup cache: ${cachedCount}/11)`);
       await Promise.all(uniqueScreens.map(async (key) => {
+        // Use startup-cached file if available (avoids per-request download)
+        if (CACHED_SCREEN_PATHS[key] && fs.existsSync(CACHED_SCREEN_PATHS[key])) {
+          screenPaths[key] = CACHED_SCREEN_PATHS[key];
+          console.log(`[${jobId}]   Screen '${key}' from cache`);
+          return;
+        }
+        // Fallback: download fresh
         const url = APP_SCREEN_URLS[key];
         if (!url) return;
         const localPath = path.join(TEMP_DIR, `${jobId}_screen_${key}.png`);
@@ -749,7 +757,7 @@ app.post('/assemble', async (req, res) => {
           const sz = fs.statSync(localPath).size;
           if (sz > 5000) {
             screenPaths[key] = localPath;
-            console.log(`[${jobId}]   Screen '${key}' downloaded (${sz} bytes)`);
+            console.log(`[${jobId}]   Screen '${key}' downloaded fresh (${sz} bytes)`);
           } else {
             console.warn(`[${jobId}]   Screen '${key}' too small (${sz}b), skipping`);
           }
@@ -1155,6 +1163,32 @@ app.post('/assemble', async (req, res) => {
   }
 });
 
+// ─── STARTUP: Pre-cache all app screens to /tmp for fast per-request access ──
+// This avoids downloading 11 PNGs on every video request (saves ~5-10s per job).
+const CACHED_SCREEN_PATHS = {}; // { screenKey: '/tmp/cached_screen_<key>.png' }
+
+async function preCacheAppScreens() {
+  console.log('[startup] Pre-caching app screens...');
+  const keys = Object.keys(APP_SCREEN_URLS);
+  await Promise.all(keys.map(async (key) => {
+    const url = APP_SCREEN_URLS[key];
+    const dest = path.join(TEMP_DIR, `cached_screen_${key}.png`);
+    try {
+      await downloadFile(url, dest);
+      const sz = fs.statSync(dest).size;
+      if (sz > 5000) {
+        CACHED_SCREEN_PATHS[key] = dest;
+        console.log(`[startup]   ✓ ${key} (${sz} bytes)`);
+      } else {
+        console.warn(`[startup]   ✗ ${key} too small (${sz}b)`);
+      }
+    } catch (e) {
+      console.warn(`[startup]   ✗ ${key} failed: ${e.message}`);
+    }
+  }));
+  console.log(`[startup] App screens cached: ${Object.keys(CACHED_SCREEN_PATHS).length}/${keys.length}`);
+}
+
 app.listen(PORT, () => {
   console.log(`YFIT Video Service v4.0.0 running on port ${PORT}`);
   console.log(`Pexels API: ${PEXELS_API_KEY ? 'configured' : 'NOT configured - set PEXELS_API_KEY'}`);
@@ -1165,4 +1199,6 @@ app.listen(PORT, () => {
   } catch (e) {
     console.warn('WARNING: ffmpeg not found!');
   }
+  // Pre-cache app screens in background (non-blocking)
+  preCacheAppScreens().catch(e => console.warn('[startup] Pre-cache error:', e.message));
 });
