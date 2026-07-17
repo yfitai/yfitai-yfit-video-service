@@ -1,6 +1,6 @@
 'use strict';
 // ============================================================
-// YFIT Video Service v3.8.0
+// YFIT Video Service v4.0.0
 // ============================================================
 // CHANGES vs v3.2.0:
 //
@@ -49,6 +49,83 @@ const PEXELS_API_KEY = process.env.PEXELS_API_KEY;
 
 // YFIT logo — transparent PNG, tight-cropped
 const YFIT_LOGO_URL = 'https://d2xsxph8kpxj0f.cloudfront.net/310519663099417101/8TNedJULyoVCPDLa6UYde3/yfit_logo_new_e83060df.png';
+// ─── APP SCREEN URLS — Full-width fade overlays (v4.0.0) ────────────────────
+// Hosted in Supabase Storage: yfit-videos/assets/app-screens/
+const APP_SCREEN_URLS = {
+  'dashboard':    'https://mxggxpoxgqubojvumjlt.supabase.co/storage/v1/object/public/yfit-videos/assets/app-screens/screen_01_dashboard.png',
+  'goals':        'https://mxggxpoxgqubojvumjlt.supabase.co/storage/v1/object/public/yfit-videos/assets/app-screens/screen_02_goals.png',
+  'nutrition':    'https://mxggxpoxgqubojvumjlt.supabase.co/storage/v1/object/public/yfit-videos/assets/app-screens/screen_03_nutrition.png',
+  'dailyTracker': 'https://mxggxpoxgqubojvumjlt.supabase.co/storage/v1/object/public/yfit-videos/assets/app-screens/screen_04_dailyTracker.png',
+  'fitness':      'https://mxggxpoxgqubojvumjlt.supabase.co/storage/v1/object/public/yfit-videos/assets/app-screens/screen_05_fitness.png',
+  'medications':  'https://mxggxpoxgqubojvumjlt.supabase.co/storage/v1/object/public/yfit-videos/assets/app-screens/screen_06_medications.png',
+  'progress':     'https://mxggxpoxgqubojvumjlt.supabase.co/storage/v1/object/public/yfit-videos/assets/app-screens/screen_07_progress.png',
+  'predictions':  'https://mxggxpoxgqubojvumjlt.supabase.co/storage/v1/object/public/yfit-videos/assets/app-screens/screen_08_predictions.png',
+  'recomp':       'https://mxggxpoxgqubojvumjlt.supabase.co/storage/v1/object/public/yfit-videos/assets/app-screens/screen_09_recomp.png',
+  'aiCoach':      'https://mxggxpoxgqubojvumjlt.supabase.co/storage/v1/object/public/yfit-videos/assets/app-screens/screen_10_aiCoach.png',
+  'language':     'https://mxggxpoxgqubojvumjlt.supabase.co/storage/v1/object/public/yfit-videos/assets/app-screens/screen_11_language.png',
+};
+
+// ─── ANGLE → APP SCREEN SCHEDULE ────────────────────────────────────────────
+// Defines which app screens appear at what fraction of the voiceover duration.
+// Each entry: { screen: <key>, start: <0..1>, end: <0..1> }
+// start/end are fractions of audioDuration (NOT totalDuration — screens only
+// appear during the voiceover, not the CTA hold).
+// The CTA hold always shows the dashboard screen (handled separately).
+const ANGLE_SCREEN_SCHEDULE = {
+  'medication_fitness': [
+    { screen: 'medications', start: 0.05, end: 0.35 },
+    { screen: 'dailyTracker', start: 0.40, end: 0.65 },
+    { screen: 'aiCoach',     start: 0.70, end: 0.90 },
+  ],
+  'form_analysis': [
+    { screen: 'fitness',  start: 0.05, end: 0.35 },
+    { screen: 'progress', start: 0.40, end: 0.65 },
+    { screen: 'aiCoach',  start: 0.70, end: 0.90 },
+  ],
+  'workout_tips': [
+    { screen: 'fitness',  start: 0.05, end: 0.35 },
+    { screen: 'progress', start: 0.40, end: 0.65 },
+    { screen: 'dashboard', start: 0.70, end: 0.90 },
+  ],
+  'nutrition_advice': [
+    { screen: 'nutrition',    start: 0.05, end: 0.35 },
+    { screen: 'dailyTracker', start: 0.40, end: 0.65 },
+    { screen: 'goals',        start: 0.70, end: 0.90 },
+  ],
+  'nutrition_science': [
+    { screen: 'nutrition',    start: 0.05, end: 0.35 },
+    { screen: 'dailyTracker', start: 0.40, end: 0.65 },
+    { screen: 'predictions',  start: 0.70, end: 0.90 },
+  ],
+  'transformation_story': [
+    { screen: 'goals',    start: 0.05, end: 0.30 },
+    { screen: 'progress', start: 0.35, end: 0.60 },
+    { screen: 'recomp',   start: 0.65, end: 0.90 },
+  ],
+  'recovery_wellness': [
+    { screen: 'dailyTracker', start: 0.05, end: 0.35 },
+    { screen: 'progress',     start: 0.40, end: 0.65 },
+    { screen: 'predictions',  start: 0.70, end: 0.90 },
+  ],
+  // Default schedule for any other angle
+  '_default': [
+    { screen: 'dashboard',    start: 0.05, end: 0.30 },
+    { screen: 'fitness',      start: 0.35, end: 0.60 },
+    { screen: 'aiCoach',      start: 0.65, end: 0.90 },
+  ],
+};
+
+// Resolve the screen schedule for a given content angle.
+// Returns array of { screen, startSec, endSec } with absolute timestamps.
+function resolveScreenSchedule(contentAngle, audioDuration) {
+  const schedule = ANGLE_SCREEN_SCHEDULE[contentAngle] || ANGLE_SCREEN_SCHEDULE['_default'];
+  return schedule.map(entry => ({
+    screen: entry.screen,
+    startSec: entry.start * audioDuration,
+    endSec:   entry.end   * audioDuration,
+  }));
+}
+
 
 // ─── BRAND MUSIC — Sonic Identity ────────────────────────────────────────────
 const BGM_TRACKS = {
@@ -88,7 +165,7 @@ app.get('/health', (req, res) => {
     status: 'ok',
     ffmpeg: ffmpegVersion,
     pexels: PEXELS_API_KEY ? 'configured' : 'missing',
-    version: '3.8.0',
+    version: '4.0.0',
     timestamp: new Date().toISOString()
   });
 });
@@ -553,9 +630,11 @@ app.post('/assemble', async (req, res) => {
     voiceover_url, run_date, content_angle, caption_text, script,
     video_items = [], text_items = [], dry_run = false, pexels_query,
     word_timing = [],
-    burn_captions = true  // v3.6.5: set to false to skip burned-in captions (e.g. for YouTube which has auto-captions)
+    burn_captions = true,  // v3.6.5: set to false to skip burned-in captions (e.g. for YouTube which has auto-captions)
+    app_screens = true     // v4.0.0: set to false to disable app screen overlays
   } = req.body;
   if (typeof burn_captions === 'string') { burn_captions = burn_captions !== 'false'; }
+  if (typeof app_screens === 'string') { app_screens = app_screens !== 'false'; }
 
   if (typeof word_timing === 'string') { try { word_timing = JSON.parse(word_timing); } catch(e) { word_timing = []; } }
   if (typeof video_items === 'string') { try { video_items = JSON.parse(video_items); } catch(e) { video_items = []; } }
@@ -589,7 +668,7 @@ app.post('/assemble', async (req, res) => {
   const firstItem = video_items[0] || {};
   const scriptText = script || firstItem.script || '';
 
-  console.log(`[${jobId}] Starting assembly v3.6.0. dry_run=${dry_run}, query="${searchQuery}", angle="${content_angle}", word_timing=${word_timing.length} words`);
+  console.log(`[${jobId}] Starting assembly v4.0.0. dry_run=${dry_run}, query="${searchQuery}", angle="${content_angle}", word_timing=${word_timing.length} words, app_screens=${app_screens}`);
 
   if (dry_run) {
     return res.json({
@@ -608,6 +687,8 @@ app.post('/assemble', async (req, res) => {
   const logoPath = path.join(TEMP_DIR, `${jobId}_logo.png`);
   const finalPath = path.join(TEMP_DIR, `${jobId}_final.mp4`);
   const tempFiles = [audioPath, bgmPath, logoPath, finalPath];
+  // v4.0.0: app screen overlay paths (downloaded per-job)
+  const screenPaths = {}; // { screenKey: localPath }
 
   try {
     // Step 1: Download voiceover
@@ -630,6 +711,34 @@ app.post('/assemble', async (req, res) => {
         audio_duration_seconds: audioDuration,
         job_id: jobId
       });
+    }
+
+    // Step 1b: v4.0.0 — Download app screen PNGs for overlay
+    let screenSchedule = [];
+    if (app_screens) {
+      screenSchedule = resolveScreenSchedule(content_angle, audioDuration);
+      const uniqueScreens = [...new Set(screenSchedule.map(s => s.screen))];
+      // Always download dashboard for the CTA hold
+      if (!uniqueScreens.includes('dashboard')) uniqueScreens.push('dashboard');
+      console.log(`[${jobId}] v4.0.0: Downloading ${uniqueScreens.length} app screens: ${uniqueScreens.join(', ')}`);
+      await Promise.all(uniqueScreens.map(async (key) => {
+        const url = APP_SCREEN_URLS[key];
+        if (!url) return;
+        const localPath = path.join(TEMP_DIR, `${jobId}_screen_${key}.png`);
+        tempFiles.push(localPath);
+        try {
+          await downloadFile(url, localPath);
+          const sz = fs.statSync(localPath).size;
+          if (sz > 5000) {
+            screenPaths[key] = localPath;
+            console.log(`[${jobId}]   Screen '${key}' downloaded (${sz} bytes)`);
+          } else {
+            console.warn(`[${jobId}]   Screen '${key}' too small (${sz}b), skipping`);
+          }
+        } catch (e) {
+          console.warn(`[${jobId}]   Screen '${key}' download failed: ${e.message}`);
+        }
+      }));
     }
 
     // Step 2: Download YFIT logo
@@ -808,83 +917,141 @@ app.post('/assemble', async (req, res) => {
     console.log(`[${jobId}] Final: ${segments.length} caption segments`);
 
     // Step 5: Compose final video
-    console.log(`[${jobId}] Composing final video... burn_captions=${burn_captions}`);
+    console.log(`[${jobId}] Composing final video... burn_captions=${burn_captions}, app_screens=${app_screens}`);
 
     const logoExists = fs.existsSync(logoPath) && fs.statSync(logoPath).size > 1000;
-    // v3.6.5: skip burned-in captions when burn_captions=false (e.g. YouTube uses auto-captions)
     const cyclingFilters = burn_captions ? buildCaptionFilters(segments, audioDuration, FONT_BOLD) : [];
 
-    // End card: v3.6.0 — 8 seconds AFTER audio ends (CTA hold frame)
-    // NOTE: CTA_HOLD and totalDuration are declared earlier (after audioDuration) to avoid TDZ error
     const endCardStart = audioDuration;
     const endCardEnable = `enable='between(t,${endCardStart.toFixed(2)},${totalDuration.toFixed(2)})'`;
 
     const staticVfFilters = [
       `eq=contrast=1.05`,
-      // yfitai.com — top-right, YFIT green, shadow only
       `drawtext=fontfile=${FONT_BOLD}:text='yfitai.com':fontsize=30:fontcolor=${YFIT_GREEN}@0.95:` +
       `x=w-text_w-24:y=28:shadowcolor=black@0.85:shadowx=2:shadowy=2`,
-      // End card
       `drawtext=fontfile=${FONT_BOLD}:text='Try YFIT AI Free':fontsize=40:fontcolor=white@0.95:x=(w-text_w)/2:y=(h/2)-70:shadowcolor=black@0.9:shadowx=2:shadowy=2:${endCardEnable}`,
       `drawtext=fontfile=${FONT_BOLD}:text='yfitai.com':fontsize=64:fontcolor=${YFIT_GREEN}:x=(w-text_w)/2:y=(h/2)-2:shadowcolor=black@0.9:shadowx=3:shadowy=3:${endCardEnable}`,
     ];
+
+    // ─── v4.0.0: Build overlay events ────────────────────────────────────────
+    // Full-width fade: each screen fades in over 0.4s, holds, fades out over 0.4s.
+    // CTA hold (audioDuration → totalDuration) always shows dashboard.
+    const FADE_DUR = 0.4;
+
+    let overlayEvents = [];
+    if (app_screens && Object.keys(screenPaths).length > 0) {
+      for (const entry of screenSchedule) {
+        if (screenPaths[entry.screen]) {
+          overlayEvents.push({ screen: entry.screen, path: screenPaths[entry.screen], startSec: entry.startSec, endSec: entry.endSec });
+        }
+      }
+      const ctaScreen = screenPaths['dashboard'] ? 'dashboard' : Object.keys(screenPaths)[0];
+      if (ctaScreen && screenPaths[ctaScreen]) {
+        overlayEvents.push({ screen: ctaScreen, path: screenPaths[ctaScreen], startSec: audioDuration, endSec: totalDuration });
+      }
+      console.log(`[${jobId}] v4.0.0: ${overlayEvents.length} overlay events scheduled`);
+      overlayEvents.forEach((ev, i) => {
+        console.log(`  [overlay ${i}] '${ev.screen}' ${ev.startSec.toFixed(2)}s → ${ev.endSec.toFixed(2)}s`);
+      });
+    }
 
     const vfOnlyFilters = [...staticVfFilters, ...(burn_captions ? cyclingFilters : [])].join(',');
 
     const fcScriptPath = path.join(TEMP_DIR, `${jobId}_fc.txt`);
     tempFiles.push(fcScriptPath);
-    let finalCmd;
-    if (logoExists) {
-      if (bgmExists) {
-        // v3.6.0: pad audio with CTA_HOLD seconds of silence so video runs full totalDuration
-        const fc = `[0:v]${vfOnlyFilters}[vbase];[1:v]scale=240:-1,format=rgba[logo];[vbase][logo]overlay=x=20:y=10:format=auto[vout];[2:a]aresample=48000,highpass=f=150,lowpass=f=12000,volume=${BGM_VOLUME},aloop=loop=-1:size=2e+09,afade=t=in:st=0:d=1.5,afade=t=out:st=999:d=2[bgm];[3:a]aresample=48000,loudnorm=I=-16:TP=-1.5:LRA=11[voice];aevalsrc=0:c=stereo:s=48000:d=${CTA_HOLD.toFixed(1)}[silence];[voice][silence]concat=n=2:v=0:a=1[voicepadded];[voicepadded][bgm]amix=inputs=2:duration=first:dropout_transition=3[aout]`;
-        fs.writeFileSync(fcScriptPath, fc);
-        finalCmd = `ffmpeg -y -i "${baseVideoPath}" -i "${logoPath}" -i "${bgmPath}" -i "${audioPath}" -filter_complex_script "${fcScriptPath}" -map "[vout]" -map "[aout]" -t ${totalDuration.toFixed(2)} -c:v libx264 -preset fast -crf 22 -c:a aac -b:a 192k -ar 48000 -pix_fmt yuv420p -movflags +faststart "${finalPath}"`;
+
+    // Build filter_complex dynamically with overlay inputs
+    const buildFilterComplex = (baseIdx, logoIdx, bgmIdx, audioIdx, screenStartIdx) => {
+      const lines = [];
+
+      // 1. Apply vf filters to base video
+      if (overlayEvents.length > 0) {
+        lines.push(`[${baseIdx}:v]${vfOnlyFilters}[vbase0]`);
+        let prevLabel = 'vbase0';
+        overlayEvents.forEach((ev, i) => {
+          const screenIdx = screenStartIdx + i;
+          const outLabel = (i === overlayEvents.length - 1) ? 'vbase' : `vbase${i + 1}`;
+          const alphaExpr =
+            `if(between(t\,${ev.startSec.toFixed(3)}\,${ev.endSec.toFixed(3)})\,` +
+            `min(1\,min((t-${ev.startSec.toFixed(3)})/${FADE_DUR}\,(${ev.endSec.toFixed(3)}-t)/${FADE_DUR}))\,0)`;
+          lines.push(
+            `[${screenIdx}:v]scale=1080:1920:force_original_aspect_ratio=increase,` +
+            `crop=1080:1920,setsar=1,format=rgba,` +
+            `geq=r='r(X\,Y)':g='g(X\,Y)':b='b(X\,Y)':a='255*${alphaExpr}'[screen${i}]`
+          );
+          lines.push(`[${prevLabel}][screen${i}]overlay=0:0:format=auto[${outLabel}]`);
+          prevLabel = outLabel;
+        });
       } else {
-        // v3.6.0: pad audio with silence for CTA hold (no BGM path)
-        const fc = `[0:v]${vfOnlyFilters}[vbase];[1:v]scale=240:-1,format=rgba[logo];[vbase][logo]overlay=x=20:y=10:format=auto[vout];[2:a]aresample=48000,loudnorm=I=-16:TP=-1.5:LRA=11[voice];aevalsrc=0:c=stereo:s=48000:d=${CTA_HOLD.toFixed(1)}[silence];[voice][silence]concat=n=2:v=0:a=1[aout]`;
-        fs.writeFileSync(fcScriptPath, fc);
-        finalCmd = `ffmpeg -y -i "${baseVideoPath}" -i "${logoPath}" -i "${audioPath}" -filter_complex_script "${fcScriptPath}" -map "[vout]" -map "[aout]" -t ${totalDuration.toFixed(2)} -c:v libx264 -preset fast -crf 22 -c:a aac -b:a 192k -pix_fmt yuv420p -movflags +faststart "${finalPath}"`;
+        lines.push(`[${baseIdx}:v]${vfOnlyFilters}[vbase]`);
       }
-    } else {
-      // Text-only fallback if logo download failed
-      const fallbackVf = [
-        ...staticVfFilters,
-        `drawtext=fontfile=${FONT_BOLD}:text='YFIT AI':fontsize=36:fontcolor=${YFIT_GREEN}@0.95:x=20:y=20:shadowcolor=black@0.85:shadowx=2:shadowy=2`,
-        ...cyclingFilters
-      ].join(',');
-      if (bgmExists) {
-        // v3.6.0: pad audio with silence for CTA hold (no-logo + BGM path)
-        finalCmd = [
-          'ffmpeg -y',
-          `-i "${baseVideoPath}"`,
-          `-i "${bgmPath}"`,
-          `-i "${audioPath}"`,
-          `-filter_complex "[1:a]aresample=48000,highpass=f=150,lowpass=f=12000,volume=${BGM_VOLUME},aloop=loop=-1:size=2e+09,afade=t=in:st=0:d=1.5,afade=t=out:st=999:d=2[bgm];[2:a]aresample=48000,loudnorm=I=-16:TP=-1.5:LRA=11[voice];aevalsrc=0:c=stereo:s=48000:d=${CTA_HOLD.toFixed(1)}[silence];[voice][silence]concat=n=2:v=0:a=1[voicepadded];[voicepadded][bgm]amix=inputs=2:duration=first:dropout_transition=3[aout]"`,
-          `-map 0:v -map "[aout]"`,
-          `-vf "${fallbackVf}"`,
-          `-t ${totalDuration.toFixed(2)}`,
-          `-c:v libx264 -preset fast -crf 22 -c:a aac -b:a 192k`,
-          `-pix_fmt yuv420p -movflags +faststart`,
-          `"${finalPath}"`
-        ].join(' ');
+
+      // 2. Logo overlay
+      if (logoIdx !== null) {
+        lines.push(`[${logoIdx}:v]scale=240:-1,format=rgba[logo]`);
+        lines.push(`[vbase][logo]overlay=x=20:y=10:format=auto[vout]`);
       } else {
-        // v3.6.0: pad audio with silence for CTA hold (no-logo, no-BGM path)
-        finalCmd = [
-          'ffmpeg -y',
-          `-i "${baseVideoPath}"`,
-          `-i "${audioPath}"`,
-          `-filter_complex "[1:a]aresample=48000,loudnorm=I=-16:TP=-1.5:LRA=11[voice];aevalsrc=0:c=stereo:s=48000:d=${CTA_HOLD.toFixed(1)}[silence];[voice][silence]concat=n=2:v=0:a=1[aout]"`,
-          `-map 0:v -map "[aout]"`,
-          `-vf "${fallbackVf}"`,
-          `-t ${totalDuration.toFixed(2)}`,
-          `-c:v libx264 -preset fast -crf 22 -c:a aac -b:a 192k`,
-          `-pix_fmt yuv420p -movflags +faststart`,
-          `"${finalPath}"`
-        ].join(' ');
+        lines.push(`[vbase]copy[vout]`);
       }
+
+      // 3. Audio chain
+      if (bgmIdx !== null) {
+        lines.push(
+          `[${bgmIdx}:a]aresample=48000,highpass=f=150,lowpass=f=12000,volume=${BGM_VOLUME},` +
+          `aloop=loop=-1:size=2e+09,afade=t=in:st=0:d=1.5,afade=t=out:st=999:d=2[bgm]`
+        );
+      }
+      lines.push(`[${audioIdx}:a]aresample=48000,loudnorm=I=-16:TP=-1.5:LRA=11[voice]`);
+      lines.push(`aevalsrc=0:c=stereo:s=48000:d=${CTA_HOLD.toFixed(1)}[silence]`);
+      lines.push(`[voice][silence]concat=n=2:v=0:a=1[voicepadded]`);
+      if (bgmIdx !== null) {
+        lines.push(`[voicepadded][bgm]amix=inputs=2:duration=first:dropout_transition=3[aout]`);
+      } else {
+        lines.push(`[voicepadded]anull[aout]`);
+      }
+
+      return lines.join(';\n');
+    };
+
+    const buildFfmpegCmd = () => {
+      const inputs = [`-i "${baseVideoPath}"`];
+      let logoIdx = null, bgmIdx = null, audioIdx = null, screenStartIdx = null;
+
+      if (logoExists) { logoIdx = inputs.length; inputs.push(`-i "${logoPath}"`); }
+      if (bgmExists)  { bgmIdx  = inputs.length; inputs.push(`-i "${bgmPath}"`); }
+      audioIdx = inputs.length; inputs.push(`-i "${audioPath}"`);
+      screenStartIdx = inputs.length;
+      for (const ev of overlayEvents) { inputs.push(`-i "${ev.path}"`); }
+
+      const fc = buildFilterComplex(0, logoIdx, bgmIdx, audioIdx, screenStartIdx);
+      fs.writeFileSync(fcScriptPath, fc);
+
+      return [
+        'ffmpeg -y',
+        ...inputs,
+        `-filter_complex_script "${fcScriptPath}"`,
+        `-map "[vout]" -map "[aout]"`,
+        `-t ${totalDuration.toFixed(2)}`,
+        `-c:v libx264 -preset fast -crf 22`,
+        `-c:a aac -b:a 192k -ar 48000`,
+        `-pix_fmt yuv420p -movflags +faststart`,
+        `"${finalPath}"`
+      ].join(' ');
+    };
+
+    let finalCmd = buildFfmpegCmd();
+    console.log(`[${jobId}] ffmpeg command length: ${finalCmd.length} chars`);
+
+        try {
+      execSync(finalCmd, { timeout: 600000, shell: true });
+    } catch (ffmpegErr) {
+      // v4.0.0: If overlay build fails, retry without app screen overlays
+      console.warn(`[${jobId}] ffmpeg with overlays failed: ${ffmpegErr.message.substring(0, 200)}`);
+      console.warn(`[${jobId}] Retrying without app screen overlays...`);
+      overlayEvents = [];
+      finalCmd = buildFfmpegCmd();
+      execSync(finalCmd, { timeout: 600000, shell: true });
     }
-    execSync(finalCmd, { timeout: 600000, shell: true });
 
     const videoSize = fs.statSync(finalPath).size;
     console.log(`[${jobId}] Final video: ${videoSize} bytes`);
@@ -955,6 +1122,8 @@ app.post('/assemble', async (req, res) => {
       tips_count: segments.length,
       bgm_track: selectedBgmName,
       caption_sync_mode: (word_timing && word_timing.length > 0) ? 'word_timing' : 'proportional',
+      app_screens_used: overlayEvents.length,
+      app_screens_schedule: overlayEvents.map(ev => ({ screen: ev.screen, startSec: parseFloat(ev.startSec.toFixed(2)), endSec: parseFloat(ev.endSec.toFixed(2)) })),
       srt_content: srtContent,
       srt_url: srtUrl,
       platforms: video_items.map(v => v.platform),
@@ -970,7 +1139,7 @@ app.post('/assemble', async (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`YFIT Video Service v3.7.2 running on port ${PORT}`);
+  console.log(`YFIT Video Service v4.0.0 running on port ${PORT}`);
   console.log(`Pexels API: ${PEXELS_API_KEY ? 'configured' : 'NOT configured - set PEXELS_API_KEY'}`);
   console.log(`Logo URL: ${YFIT_LOGO_URL}`);
   console.log(`BGM: Primary=${BGM_TRACKS.primary.split('/').pop()}, Energetic=${BGM_TRACKS.energetic.split('/').pop()}, Deep=${BGM_TRACKS.deep.split('/').pop()}`);
