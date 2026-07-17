@@ -158,6 +158,24 @@ const FONT_REGULAR = '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf';
 const YFIT_GREEN = '0x00ff88';
 
 // Health check
+
+// ─── DEBUG: Test app screen downloads ────────────────────────────────────────
+app.get('/debug-screens', async (req, res) => {
+  const results = {};
+  for (const [key, url] of Object.entries(APP_SCREEN_URLS)) {
+    try {
+      const tmpPath = path.join(TEMP_DIR, `debug_screen_${key}.png`);
+      await downloadFile(url, tmpPath);
+      const sz = fs.existsSync(tmpPath) ? fs.statSync(tmpPath).size : 0;
+      results[key] = { ok: sz > 5000, size: sz, url };
+      try { fs.unlinkSync(tmpPath); } catch (e) {}
+    } catch (e) {
+      results[key] = { ok: false, error: e.message, url };
+    }
+  }
+  res.json({ version: '4.0.0', results });
+});
+
 app.get('/health', (req, res) => {
   let ffmpegVersion = 'not found';
   try { ffmpegVersion = execSync('ffmpeg -version 2>&1 | head -1').toString().trim(); } catch (e) {}
