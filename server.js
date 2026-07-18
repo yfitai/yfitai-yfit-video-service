@@ -173,7 +173,7 @@ app.get('/debug-screens', async (req, res) => {
       results[key] = { ok: false, error: e.message, url };
     }
   }
-  res.json({ version: '4.0.0', results });
+  res.json({ version: '4.1.0', results });
 });
 
 app.get('/health', (req, res) => {
@@ -183,7 +183,7 @@ app.get('/health', (req, res) => {
     status: 'ok',
     ffmpeg: ffmpegVersion,
     pexels: PEXELS_API_KEY ? 'configured' : 'missing',
-    version: '4.0.0',
+    version: '4.1.0',
     timestamp: new Date().toISOString()
   });
 });
@@ -905,7 +905,7 @@ app.post('/assemble', async (req, res) => {
         tempFiles.push(concatPath);
         // v3.6.0: extend clips to totalDuration (audioDuration + CTA_HOLD) so CTA hold frame has video
         execSync(
-          `ffmpeg -y -f concat -safe 0 -i "${concatListPath}" -t ${totalDuration.toFixed(2)} -c:v libx264 -preset fast -pix_fmt yuv420p -r 30 "${concatPath}"`,
+          `ffmpeg -y -f concat -safe 0 -i "${concatListPath}" -t ${totalDuration.toFixed(2)} -c:v libx264 -preset fast -crf 28 -pix_fmt yuv420p -r 30 "${concatPath}"`,
           { timeout: 300000, shell: true }
         );
         baseVideoPath = concatPath;
@@ -919,7 +919,7 @@ app.post('/assemble', async (req, res) => {
       tempFiles.push(bgPath);
       // v3.6.0: extend fallback bg to totalDuration
       execSync(
-        `ffmpeg -y -f lavfi -i "color=c=0x0d1117:size=1080x1920:rate=30" -t ${totalDuration.toFixed(2)} -c:v libx264 -preset fast -pix_fmt yuv420p "${bgPath}"`,
+        `ffmpeg -y -f lavfi -i "color=c=0x0d1117:size=1080x1920:rate=30" -t ${totalDuration.toFixed(2)} -c:v libx264 -preset fast -crf 28 -pix_fmt yuv420p "${bgPath}"`,
         { timeout: 120000, shell: true }
       );
       baseVideoPath = bgPath;
@@ -1057,8 +1057,8 @@ app.post('/assemble', async (req, res) => {
         `-filter_complex_script "${fcScriptPath}"`,
         `-map "[vout]" -map "[aout]"`,
         `-t ${totalDuration.toFixed(2)}`,
-        `-c:v libx264 -preset fast -crf 22`,
-        `-c:a aac -b:a 192k -ar 48000`,
+        `-c:v libx264 -preset fast -crf 28 -maxrate 2500k -bufsize 5000k`,
+        `-c:a aac -b:a 128k -ar 44100`,
         `-pix_fmt yuv420p -movflags +faststart`,
         `"${finalPath}"`
       ].join(' ');
